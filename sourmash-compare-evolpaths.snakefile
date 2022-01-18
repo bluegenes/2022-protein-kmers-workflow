@@ -61,7 +61,7 @@ for alpha, info in alphabet_info.items():
 
 rule all:
     input:
-        os.path.join(out_dir, "path-compare", f"{basename}.pathcompare.csv.gz")
+        os.path.join(out_dir, "path-compare", f"{basename}.pathcompare.csv.gz"),
         os.path.join(out_dir, "path-compare-translate", f"{basename}.pathcompare.csv.gz")
 
 def make_param_str(ksizes, scaled):
