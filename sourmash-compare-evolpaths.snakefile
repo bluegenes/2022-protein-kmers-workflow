@@ -62,7 +62,7 @@ for alpha, info in alphabet_info.items():
 rule all:
     input:
         os.path.join(out_dir, "path-compare", f"{basename}.pathcompare.csv.gz"),
-        os.path.join(out_dir, "path-compare-translate", f"{basename}.pathcompare.csv.gz")
+#        os.path.join(out_dir, "path-compare-translate", f"{basename}.pathcompare.csv.gz")
 
 def make_param_str(ksizes, scaled):
     ks = [ f'k={k}' for k in ksizes ]
@@ -144,8 +144,8 @@ rule signames_to_file:
 localrules: translate_signames_to_file
 rule translate_signames_to_file:
     input:
-        expand(os.path.join(out_dir, "sketch_translate", "{acc}.{{alphabet}}.sig"), acc=ACCS)
-    output: os.path.join(out_dir, f"{basename}.translate.{{alphabet}}.siglist.txt")
+        expand(os.path.join(out_dir, "sketch_translate", "{acc}.protein.sig"), acc=ACCS)
+    output: os.path.join(out_dir, f"{basename}.translate.protein.siglist.txt")
     run:
         with open(str(output), "w") as outF:
             for inF in input:
@@ -180,7 +180,6 @@ localrules: aggregate_pathcompare
 rule aggregate_pathcompare:
     input:
         expand(os.path.join(out_dir, "path-compare", "{path}.{alphak}.pathcompare.csv"), path=path_names, alphak=alpha_ksizes)
-        #expand(os.path.join(out_dir, "path-compare", "{basename}.{alphak}.pathcompare.csv"), basename=basename, alphak=alpha_ksizes)
     output:
         os.path.join(out_dir, "path-compare", "{basename}.pathcompare.csv.gz")
     run:
@@ -192,7 +191,7 @@ rule aggregate_pathcompare:
 
 rule compare_paths_translate:
     input: 
-        siglist= os.path.join(out_dir, f"{basename}.translate.{{alphabet}}.siglist.txt"),
+        siglist= os.path.join(out_dir, f"{basename}.translate.protein.siglist.txt"),
         paths = config["paths_csv"], 
     output: 
         f"{out_dir}/path-compare-translate/{{path}}.{{alphabet}}-k{{ksize}}.pathcompare.csv"
@@ -204,8 +203,8 @@ rule compare_paths_translate:
         mem_mb=lambda wildcards, attempt: attempt *3000,
         runtime=1200,
     conda: "conf/env/sourmash-dist.yml"
-    log: f"{logs_dir}/path-compare/{{path}}.{{alphabet}}-k{{ksize}}.pathcompare.log"
-    benchmark: f"{logs_dir}/path-compare/{{path}}.{{alphabet}}-k{{ksize}}.pathcompare.benchmark",
+    log: f"{logs_dir}/path-compare-translate/{{path}}.{{alphabet}}-k{{ksize}}.pathcompare.log"
+    benchmark: f"{logs_dir}/path-compare-translate/{{path}}.{{alphabet}}-k{{ksize}}.pathcompare.benchmark",
     shell:
         """
         python conf/scripts/pathcompare.py --paths-csv {input.paths} -k {wildcards.ksize} --alphabet {wildcards.alphabet} \
@@ -216,7 +215,7 @@ rule compare_paths_translate:
 localrules: aggregate_pathcompare_translate
 rule aggregate_pathcompare_translate:
     input:
-        expand(os.path.join(out_dir, "path-compare-translate", "{basename}.{alphak}.pathcompare.csv"), basename=basename, alphak=alpha_ksizes)
+        expand(os.path.join(out_dir, "path-compare-translate", "{basename}.{alphak}.pathcompare.csv"), basename=basename, alphak=prot_alpha_ksizes)
     output:
         os.path.join(out_dir, "path-compare-translate", "{basename}.pathcompare.csv.gz")
     run:
