@@ -1,6 +1,12 @@
 # cluster_config.yml - cluster configuration
 __default__:
     account: ctbrowngrp
-    partition: bml
+    partition: low2 #bml
     job-name: "{rule}.w{wildcards}"
     logdir: "/home/ntpierce/2022-protein-kmers-workflow/slurm-logs"
+protein_AAI_via_compareM:
+    account: ctbrowngrp
+    partition: med2 #bml
+    job-name: "{rule}.w{wildcards}"
+    logdir: "/home/ntpierce/2022-protein-kmers-workflow/slurm-logs"
+
