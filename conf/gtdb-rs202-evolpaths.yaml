@@ -1,0 +1,23 @@
+# location for all generated files
+basename: gtdb-rs202
+
+output_dir: output.evolpaths
+
+taxonomy_csv: gtdb-rs202.taxonomy.v2.csv 
+
+paths_csv: gtdb-rs202.taxonomy.paths.csv
+
+alphabet_info:
+  nucleotide:
+    ksize: [21,31,51]
+    scaled: [1,1000,2000]
+  protein:
+    ksize: [7,8,9,10,11]
+    scaled: [1,100,200]
+  #dayhoff:
+  #  ksize: 16 #[14,15,16,17,18,19]
+  #  scaled: 1
+  #  scaled: [200] #[100,200]
+  #hp:
+  #  ksize: [32,35,42]
+  #  scaled: [100,200]

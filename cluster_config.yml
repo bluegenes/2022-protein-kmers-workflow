@@ -1,0 +1,6 @@
+# cluster_config.yml - cluster configuration
+__default__:
+    account: ctbrowngrp
+    partition: bml
+    job-name: "{rule}.w{wildcards}"
+    logdir: "/home/ntpierce/2022-protein-kmers-workflow/slurm-logs"
