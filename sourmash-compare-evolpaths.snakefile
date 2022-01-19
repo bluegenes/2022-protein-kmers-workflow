@@ -155,7 +155,7 @@ rule translate_signames_to_file:
 
 rule compare_paths:
     input: 
-        siglist= os.path.join(out_dir, f"{basename}.{{alphabet}}.siglist.txt"),
+        siglist= ancient(os.path.join(out_dir, f"{basename}.{{alphabet}}.siglist.txt")),
         paths = config["paths_csv"], 
     output: 
         f"{out_dir}/path-compare/{{path}}.{{alphabet}}-k{{ksize}}.pathcompare.csv"

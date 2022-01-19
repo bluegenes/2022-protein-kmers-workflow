@@ -59,7 +59,7 @@ rule all:
         #expand( os.path.join(out_dir, "compareM", "{basename}.path-compareM.{input_type}.csv.gz"), basename=basename, input_type = ["genomic", "proteome"]),
         
         # fastani
-        #expand(os.path.join(out_dir, "fastani", "{basename}.path-fastani.csv.gz"),basename=basename),
+        expand(os.path.join(out_dir, "fastani", "{basename}.path-fastani.csv.gz"),basename=basename),
         #expand(os.path.join(out_dir, "fastani-compare", "{basename}.fastani.tsv"), basename=basename),
 
         # compareM
@@ -112,7 +112,7 @@ rule write_protein_compareM_result_csv:
     run:
         with open(str(output), "w") as out:
             for path in path_names:
-                out.write(f"{path},{out_dir}/compareM/proteome/{path}/aai/aai_summary.tsv\n")
+                out.write(f"{path},{out_dir}/compareM/proteome/paths/{path}/aai/aai_summary.tsv\n")
 
 
 localrules: aggregate_proteome_compareM_results
@@ -126,7 +126,7 @@ rule aggregate_proteome_compareM_results:
     benchmark: os.path.join(logs_dir, "aggregate-compareM/proteome", "{basename}.path-compareM.aggregate.benchmark")
     shell:
         """
-        python aggregate-compareM-results.py --comparem-tsv-filecsv {input.compareM_proteome} \
+        python conf/scripts/aggregate-compareM-results.py --comparem-tsv-filecsv {input.compareM_proteome} \
                                              --path-info {input.paths} \
                                              --output-csv {output} > {log} 2>&1
         """
@@ -197,7 +197,7 @@ rule aggregate_genomic_compareM_results:
     benchmark: os.path.join(logs_dir, "aggregate-compareM/genomic", "{basename}.path-compareM.aggregate.benchmark")
     shell:
         """
-        python aggregate-compareM-results.py --comparem-tsv-filecsv {input.compareM_genomic} \
+        python conf/scripts/aggregate-compareM-results.py --comparem-tsv-filecsv {input.compareM_genomic} \
                                              --path-info {input.paths} \
                                              --output-csv {output} > {log} 2>&1
         """
@@ -216,7 +216,7 @@ rule build_filepaths_for_fastani:
 
 
 def get_genome_info(w):
-    anchor_acc = pathinfo[(pathinfo["path"] == w.path) & (pathinfo["rank"] == "species")].index[0]
+    anchor_acc = paths[(paths["path"] == w.path) & (paths["rank"] == "anchor")].index[0]
     anchor_g = tax_info.at[anchor_acc, 'genome_fastafile']
     path_glist =  os.path.join(out_dir, "fastani", f"{w.path}/{w.path}.filepaths.txt")
     return {"anchor_genome": anchor_g, "path_genomes": path_glist}
@@ -257,7 +257,7 @@ rule aggregate_fastani_results:
     benchmark: os.path.join(logs_dir, "fastani", "{basename}.path-fastani.aggregate.benchmark")
     shell:
         """
-        python aggregate-fastani-results.py --fastani-filecsv {input.fastani} \
+        python conf/scripts/aggregate-fastani-results.py --fastani-filecsv {input.fastani} \
                                              --path-info {input.paths} \
                                              --output-csv {output} > {log} 2>&1
         """
