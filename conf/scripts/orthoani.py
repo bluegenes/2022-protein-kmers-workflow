@@ -16,10 +16,11 @@ def main(args):
     compare_genomes = [x.strip() for x in open(compare_genomes_pathlist, "r")]
     path_name = args.path
 
-    with open(str(output), 'w') as out:
+    with open(outfile, 'w') as out:
         header = ["comparison_name", "path", "anchor_name", "compare_name", "orthoani"]
         out.write(",".join(header) + "\n")
-        anchor_g = read({anchor_gfile}, "fasta")
+        anchor_g = read(anchor_gfile, "fasta")
+        import pdb;pdb.set_trace()
         anchor_name = os.path.basename(anchor_gfile).rsplit('_genomic', 1)[0]
         for cg in compare_genomes:
             compare_g = read(cg, "fasta")
@@ -27,6 +28,7 @@ def main(args):
             comparison_name = f"{anchor_name}_x_{compare_name}"
 
             ani = orthoani.orthoani(anchor_g, compare_g)
+            ani = str(ani)
 
             out.write(f"{comparison_name},{path_name},{anchor_name},{compare_name},{ani}\n")
 
