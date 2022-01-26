@@ -10,7 +10,7 @@ import pandas as pd
 from collections import defaultdict, namedtuple
 
 anchorfastANI = namedtuple('anchorFastANI',
-                           'comparison_name, anchor_name, ref_name, path, lowest_common_rank, fastani_ident, num_bidirectional_fragment_mappings, total_query_fragments')
+                           'comparison_name, anchor_name, compare_name, path, lowest_common_rank, fastani_ident, num_bidirectional_fragment_mappings, total_query_fragments')
 
 compare_ranklist = ["genus", "family", "order", "class", "order", "class", "phylum", "superkingdom"]
 
@@ -26,7 +26,7 @@ def main(args):
         fastani.set_index("ref",inplace=True)
 
         #get anchor acc for this path
-        anchor_acc = pathInfo.loc[(pathInfo["path"] == path) & (pathInfo["rank"] == "species")]["accession"].values[0]
+        anchor_acc = pathInfo.loc[(pathInfo["path"] == path) & (pathInfo["rank"] == "anchor")]["accession"].values[0]
         # now check comparisons for results:
         for rank in compare_ranklist:
             compare_acc = pathInfo.loc[(pathInfo["path"] == path) & (pathInfo["rank"] == rank)]["accession"].values[0]
