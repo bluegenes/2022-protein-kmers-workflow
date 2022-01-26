@@ -62,6 +62,9 @@ rule all:
         expand(os.path.join(out_dir, "fastani", "{basename}.path-fastani.csv.gz"),basename=basename),
         #expand(os.path.join(out_dir, "fastani-compare", "{basename}.fastani.tsv"), basename=basename),
 
+        # orthoani
+        os.path.join(out_dir, "orthoani", f"{basename}.orthoani.csv")
+
         # compareM
         #os.path.join(out_dir, "compareM", "aai/aai_summary.tsv")
 
@@ -261,4 +264,44 @@ rule aggregate_fastani_results:
                                              --path-info {input.paths} \
                                              --output-csv {output} > {log} 2>&1
         """
+
+
+def get_genomes_for_orthoani(w):
+    anchor_acc = paths[(paths["path"] == w.path) & (paths["rank"] == "anchor")].index[0]
+    anchor_g = tax_info.at[anchor_acc, 'genome_fastafile']
+    path_accs = path2acc[w.path]
+    compare_genomes = []
+    for acc in path_accs:
+        if acc != anchor_acc:
+            compare_genomes.append(tax_info.at[acc, 'genome_fastafile'])
+    return {"anchor_genome": anchor_g, "path_genomes": compare_genomes}
+
+
+## orthoANI ##
+rule compare_via_orthoANI:
+    input:  
+        unpack(get_genome_info) # use fastani compare pathlist
+        #unpack(get_genomes_for_orthoani)
+    output: os.path.join(out_dir, "orthoani", "paths", "{path}.orthoani.csv"),
+    threads: 1
+    resources:
+        mem_mb=lambda wildcards, attempt: attempt *3000,
+        runtime=1200,
+    log: os.path.join(logs_dir, "orthoani", "{path}.orthoani.log")
+    benchmark: os.path.join(logs_dir, "orthoani", "{path}.orthoani.benchmark")
+    conda: "conf/env/orthoani.yml"
+        #orthoani -q {input.anchor_genome:q} --r {input.path_genomes:q} -o {output} > {log} 2>&1 # commandline
+    shell:
+        """
+        python conf/scripts/orthoani.py --path {wildcards.path} --anchor-genome {input.anchor_genome} \
+               --compare-genome-pathlist {input.path_genomes} --output {output} > {log}
+        """
+                
+rule aggregate_orthoani:
+    input: expand(os.path.join(out_dir, "orthoani", "paths", "{path}.orthoani.csv"), path=path_names)
+    output: os.path.join(out_dir, "orthoani", "{basename}.orthoani.csv")
+    run:
+        # aggregate all csvs --> single csv
+        aggDF = pd.concat([pd.read_csv(str(csv), sep=",") for csv in input])
+        aggDF.to_csv(str(output), index=False)
 
