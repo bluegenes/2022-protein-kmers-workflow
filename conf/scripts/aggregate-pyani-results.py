@@ -64,12 +64,27 @@ def main(args):
             compare_label = [x for x in names if x.startswith(compare_acc)][0]
             comparison_name = f"{anchor_acc}_x_{compare_acc}"
             pyani_ident, pyani_coverage, pyani_aln_length, pyani_sim_errors, pyani_hadamard = np.nan, np.nan, np.nan, np.nan, np.nan
-            # pyani SHOULD produce symmetrical matrix, so all accs should exist regardless of value, right?
-            pyani_ident = idD.at[anchor_label, compare_label]
-            pyani_coverage = covD.at[anchor_label, compare_label]
-            pyani_aln_length = lenD.at[anchor_label, compare_label]
-            pyani_sim_errors = seD.at[anchor_label, compare_label]
-            pyani_hadamard = hadD.at[anchor_label, compare_label]
+            # pyani SHOULD produce symmetrical matrix, so all accs should exist regardless of value, right? NO
+            # no, will not be symmetric. Average values instead.
+            pyani_identA = idD.at[anchor_label, compare_label]
+            pyani_identB = idD.at[compare_label, anchor_label]
+            pyani_ident = np.mean(pyani_identA, pyani_identB)
+
+            pyani_coverageA = covD.at[anchor_label, compare_label]
+            pyani_coverageB = covD.at[compare_label, anchor_label]
+            pyani_coverage = np.mean(pyani_coverageA, pyani_coverageB)
+
+            pyani_aln_lengthA = lenD.at[anchor_label, compare_label]
+            pyani_aln_lengthB = lenD.at[compare_label, anchor_label]
+            pyani_aln_length = np.mean(pyani_aln_lengthA, pyani_aln_lengthB)
+
+            pyani_sim_errorsA = seD.at[anchor_label, compare_label]
+            pyani_sim_errorsB = seD.at[compare_label, anchor_label]
+            pyani_sim_errors = np.meand(pyani_sim_errorsA, pyani_sim_errorsB)
+
+            pyani_hadamardA = hadD.at[anchor_label, compare_label]
+            pyani_hadamardB = hadD.at[compare_label, anchor_label]
+            pyani_hadamard = np.mean(pyani_hadamardA, pyani_hadamardB)
 
             this_info = anchorpyani(comparison_name, anchor_acc, compare_acc, path, rank, pyani_ident, pyani_coverage, pyani_aln_length, pyani_sim_errors, pyani_hadamard)
             anchor_results.append(this_info)
