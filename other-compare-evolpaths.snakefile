@@ -57,7 +57,7 @@ rule all:
     input: 
         # pyani
         #expand(os.path.join(out_dir, "pyani/paths/{path}/results/matrix_identity.tab"), path=path_names)
-        #os.path.join(out_dir, "pyani", f"{basename}.pyani.csv.gz"),
+        os.path.join(out_dir, "pyani", f"{basename}.pyani-ANIm.csv.gz"),
         os.path.join(out_dir, "pyani", f"{basename}.pyani-ANIb.csv.gz")
         #os.path.join(out_dir, "pyani", f"{basename}.pyani.csv")
         # orthoani
@@ -505,7 +505,7 @@ rule aggregate_all_anim:
     input:
         expand(os.path.join(out_dir, "pyani/paths", "{path}/results/{path}.pyani.csv"), path=path_names)
     output:
-        os.path.join(out_dir, "pyani", "{basename}.pyani.csv.gz")
+        os.path.join(out_dir, "pyani", "{basename}.pyani-ANIm.csv.gz")
     run:
         # aggreate all csv.gzs --> single csv
         aggDF = pd.concat([pd.read_csv(str(csv), sep=",") for csv in input])

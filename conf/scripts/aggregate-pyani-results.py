@@ -68,23 +68,23 @@ def main(args):
             # no, will not be symmetric. Average values instead.
             pyani_identA = idD.at[anchor_label, compare_label]
             pyani_identB = idD.at[compare_label, anchor_label]
-            pyani_ident = np.mean(pyani_identA, pyani_identB)
+            pyani_ident = np.mean([pyani_identA, pyani_identB])
 
             pyani_coverageA = covD.at[anchor_label, compare_label]
             pyani_coverageB = covD.at[compare_label, anchor_label]
-            pyani_coverage = np.mean(pyani_coverageA, pyani_coverageB)
+            pyani_coverage = np.mean([pyani_coverageA, pyani_coverageB])
 
             pyani_aln_lengthA = lenD.at[anchor_label, compare_label]
             pyani_aln_lengthB = lenD.at[compare_label, anchor_label]
-            pyani_aln_length = np.mean(pyani_aln_lengthA, pyani_aln_lengthB)
+            pyani_aln_length = np.mean([pyani_aln_lengthA, pyani_aln_lengthB])
 
             pyani_sim_errorsA = seD.at[anchor_label, compare_label]
             pyani_sim_errorsB = seD.at[compare_label, anchor_label]
-            pyani_sim_errors = np.meand(pyani_sim_errorsA, pyani_sim_errorsB)
+            pyani_sim_errors = np.mean([pyani_sim_errorsA, pyani_sim_errorsB])
 
             pyani_hadamardA = hadD.at[anchor_label, compare_label]
             pyani_hadamardB = hadD.at[compare_label, anchor_label]
-            pyani_hadamard = np.mean(pyani_hadamardA, pyani_hadamardB)
+            pyani_hadamard = np.mean([pyani_hadamardA, pyani_hadamardB])
 
             this_info = anchorpyani(comparison_name, anchor_acc, compare_acc, path, rank, pyani_ident, pyani_coverage, pyani_aln_length, pyani_sim_errors, pyani_hadamard)
             anchor_results.append(this_info)
