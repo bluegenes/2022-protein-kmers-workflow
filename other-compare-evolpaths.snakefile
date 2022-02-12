@@ -56,18 +56,16 @@ onerror:
 rule all:
     input: 
         # pyani
-        #expand(os.path.join(out_dir, "pyani/paths/{path}/results/matrix_identity.tab"), path=path_names)
         os.path.join(out_dir, "pyani", f"{basename}.pyani-ANIm.csv.gz"),
-        os.path.join(out_dir, "pyani", f"{basename}.pyani-ANIb.csv.gz")
-        #os.path.join(out_dir, "pyani", f"{basename}.pyani.csv")
+        os.path.join(out_dir, "pyani", f"{basename}.pyani-ANIb.csv.gz"),
+        # EzAAI
+        os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.csv.gz"),
         # orthoani
         #os.path.join(out_dir, "orthoani", f"{basename}.orthoani.csv")
-       
         
         # fastani
         #expand(os.path.join(out_dir, "fastani", "{basename}.path-fastani.csv.gz"),basename=basename),
         #expand(os.path.join(out_dir, "fastani-compare", "{basename}.fastani.tsv"), basename=basename),
-
 
         # compareM
         #os.path.join(out_dir, "compareM", "aai/aai_summary.tsv")
@@ -272,54 +270,12 @@ rule aggregate_fastani_results:
         """
 
 
-def get_genomes_for_orthoani(w):
-    anchor_acc = paths[(paths["path"] == w.path) & (paths["rank"] == "anchor")].index[0]
-    anchor_g = tax_info.at[anchor_acc, 'genome_fastafile']
-    path_accs = path2acc[w.path]
-    compare_genomes = []
-    for acc in path_accs:
-        if acc != anchor_acc:
-            compare_genomes.append(tax_info.at[acc, 'genome_fastafile'])
-    return {"anchor_genome": anchor_g, "path_genomes": compare_genomes}
-
-
-## orthoANI ##
-rule compare_via_orthoANI:
-    input:  
-        unpack(get_genome_info) # use fastani compare pathlist
-        #unpack(get_genomes_for_orthoani)
-    output: os.path.join(out_dir, "orthoani", "paths", "{path}.orthoani.csv"),
-    threads: 1
-    resources:
-        mem_mb=lambda wildcards, attempt: attempt *3000,
-        runtime=1200,
-    log: os.path.join(logs_dir, "orthoani", "{path}.orthoani.log")
-    benchmark: os.path.join(logs_dir, "orthoani", "{path}.orthoani.benchmark")
-    conda: "conf/env/orthoani.yml"
-        #orthoani -q {input.anchor_genome:q} --r {input.path_genomes:q} -o {output} > {log} 2>&1 # commandline
-    shell:
-        """
-        python conf/scripts/orthoani.py --path {wildcards.path} --anchor-genome {input.anchor_genome} \
-               --compare-genome-pathlist {input.path_genomes} --output {output} > {log}
-        """
-                
-rule aggregate_orthoani:
-    input: expand(os.path.join(out_dir, "orthoani", "paths", "{path}.orthoani.csv"), path=path_names)
-    output: os.path.join(out_dir, "orthoani", "{basename}.orthoani.csv")
-    run:
-        # aggregate all csvs --> single csv
-        aggDF = pd.concat([pd.read_csv(str(csv), sep=",") for csv in input])
-        aggDF.to_csv(str(output), index=False)
-
-
-
 def get_genomes_for_pyani(w):
     path_accs = path2acc[w.path]
     path_genomes = []
     for acc in path_accs:
         path_genomes.append(tax_info.at[acc, 'genome_fastafile'])
     return path_genomes 
-
 
 
 ### split into 6-genome folders + unzip fna files and generate classes/labels, then run pyANI index and compare 
@@ -523,6 +479,106 @@ rule aggregate_all_anib:
         aggDF.to_csv(str(output), index=False)
 
 
+rule ezAAI_extract:
+    input:
+        genome_file = lambda w: tax_info.at[w.acc, 'genome_fastafile']
+    output: 
+        db = os.path.join(out_dir, "EzAAI/paths", "{path}", "{acc}.db"),
+    params:
+        #label = lambda w: tax_info.at[w.acc, 'signame']
+        label = lambda w: w.acc,
+        ezAAI_path = config.get('ezAAI_path', "EzAAI_latest.jar"),
+        tmp_fna = os.path.join(out_dir, "EzAAI/paths", "{path}", "{acc}.tmp.fna")
+    log: os.path.join(logs_dir, "EzAAI/extract/{path}", "{acc}.extract.log")
+    benchmark: os.path.join(logs_dir, "EzAAI/extract/{path}", "{acc}.extract.benchmark")
+    conda: "conf/env/ezaai.yml"
+    threads: 1
+    resources:
+        mem_mb=lambda wildcards, attempt: attempt *3000,
+        runtime=120,
+    shell:
+        """
+        gunzip -c {input.genome_file} > {params.tmp_fna}
+        java -jar {params.ezAAI_path} extract -i {input.genome_file} \
+                  -o {output.db} -l {params.label} > {log}
+        rm {params.tmp_fna}
+        """
+
+rule ezAAI_calculate:
+    input:
+        dbs = lambda w: expand(os.path.join(out_dir, "EzAAI/paths", f"{w.path}", "{acc}.db"), acc = path2acc[w.path])
+        #genomes = lambda w: expand(tax_info.at[{{acc}}, "genome_fastafile"], acc = path2acc[w.path])
+        #get_genomes_for_pyani
+    output: 
+        tsv = os.path.join(out_dir, "EzAAI/paths", "{path}", "{path}.EzAAI.tsv"),
+    params:
+        pathdir = lambda w: os.path.abspath(os.path.join(out_dir, 'EzAAI', 'paths', w.path)),
+        ezAAI_path = config.get('ezAAI_path', "EzAAI_latest.jar")
+    log: os.path.join(logs_dir, "EzAAI/calculate/", "{path}.calculate.log")
+    benchmark: os.path.join(logs_dir, "EzAAI/calculate", "{path}.calculate.benchmark")
+    conda: "conf/env/ezaai.yml"
+    threads: 1
+    resources:
+        mem_mb=lambda wildcards, attempt: attempt *6000,
+        runtime=1200,
+    shell:
+        """
+        java -jar {params.ezAAI_path} calculate -i {params.pathdir} -j {params.pathdir} -o {output.tsv} -v > {log}
+        """
+        #python run_EzAAI.py {input} --pathdir {params.pathdir} --ezAAI_executable {params.ezAAI_path} --output-tsv {output} --logfile {log}  --mode "genome_input"
+
+def get_proteomes(w):
+    path_accs = path2acc[w.path]
+    path_proteomes = []
+    for acc in path_accs:
+        path_proteomes.append(tax_info.at[acc, 'protein_fastafile'])
+    return path_proteomes 
+
+
+#rule ezAAI_calculate_from_protein:
+#    input:
+#        #dbs = lambda w: expand(os.path.join(out_dir, "EzAAI/paths", f"{w.path}", "{acc}.db"), acc = path2acc[w.path])
+#        #genomes = lambda w: expand(tax_info.at[{{acc}}, "genome_fastafile"], acc = path2acc[w.path])
+#        get_proteomes
+#    output: 
+#        tsv = os.path.join(out_dir, "EzAAI/paths", "{path}", "{path}.prot.EzAAI.tsv"),
+#    params:
+#        pathdir = lambda w: os.path.abspath(os.path.join(out_dir, 'EzAAI', 'paths', w.path)),
+#        ezAAI_path = config.get('ezAAI_path', "EzAAI_latest.jar")
+#    log: os.path.join(logs_dir, "EzAAI/calculate/", "{path}.calculate.log")
+#    benchmark: os.path.join(logs_dir, "EzAAI/calculate", "{path}.calculate.benchmark")
+#    conda: "conf/env/ezaai.yml"
+#    threads: 1
+#    resources:
+#        mem_mb=lambda wildcards, attempt: attempt *3000,
+#        runtime=1200,
+#    shell:
+#        """
+#        python run_EzAAI.py {input} --pathdir {params.pathdir} --ezAAI_executable {params.ezAAI_path} --output-tsv {output} --logfile {log} --mode "protein_input"
+#        """
+    #run:
+    #    for gF in input.genomes:
+    #        this_acc = os.path.basename(gF).rsplit("_gen")[0]
+    #        this_db = os.path.join(params.pathdir, f"{this_acc}.db")
+    #        print(this_acc)
+    #        shell("java -jar {params.ezAAI_path} extract -i {gF} -o {this_db} -l {this_acc} >> {log}")
+    #    
+    #    shell("java -jar {params.ezAAI_path} calculate -i {params.pathdir} -j {params.pathdir} -o {output} >> {log}")
+
+
+rule aggregate_ezAAI:
+    input:
+        tsvs = expand(os.path.join(out_dir, "EzAAI/paths", "{path}", "{path}.EzAAI.tsv"),path = path_names)
+    output: 
+        os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.csv.gz")
+    log: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.aggregate.log")
+    benchmark: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.aggregate.benchmark")
+    run:    
+        # aggreate all tsvs --> single csv.gz
+        aggDF = pd.concat([pd.read_csv(str(tsv), sep="\t") for tsv in input])
+        aggDF.to_csv(str(output), index=False)
+
+
 #localrules: make_pyani_path_folder
 #rule make_pyani_path_folder_maybe_use_for_orthoani:
 #    input:
@@ -576,3 +632,44 @@ rule aggregate_all_anib:
 #                    out_classes.write(f"{md5}\t{fna_base}\t{acc}\n")
 #                    out_labels.write(f"{md5}\t{fna_base}\t{acc}\n")
 #
+def get_genomes_for_orthoani(w):
+    anchor_acc = paths[(paths["path"] == w.path) & (paths["rank"] == "anchor")].index[0]
+    anchor_g = tax_info.at[anchor_acc, 'genome_fastafile']
+    path_accs = path2acc[w.path]
+    compare_genomes = []
+    for acc in path_accs:
+        if acc != anchor_acc:
+            compare_genomes.append(tax_info.at[acc, 'genome_fastafile'])
+    return {"anchor_genome": anchor_g, "path_genomes": compare_genomes}
+
+
+## orthoANI ##
+rule compare_via_orthoANI:
+    input:  
+        unpack(get_genome_info) # use fastani compare pathlist
+        #unpack(get_genomes_for_orthoani)
+    output: os.path.join(out_dir, "orthoani", "paths", "{path}.orthoani.csv"),
+    threads: 1
+    resources:
+        mem_mb=lambda wildcards, attempt: attempt *3000,
+        runtime=1200,
+    log: os.path.join(logs_dir, "orthoani", "{path}.orthoani.log")
+    benchmark: os.path.join(logs_dir, "orthoani", "{path}.orthoani.benchmark")
+    conda: "conf/env/orthoani.yml"
+        #orthoani -q {input.anchor_genome:q} --r {input.path_genomes:q} -o {output} > {log} 2>&1 # commandline
+    shell:
+        """
+        python conf/scripts/orthoani.py --path {wildcards.path} --anchor-genome {input.anchor_genome} \
+               --compare-genome-pathlist {input.path_genomes} --output {output} > {log}
+        """
+                
+rule aggregate_orthoani:
+    input: expand(os.path.join(out_dir, "orthoani", "paths", "{path}.orthoani.csv"), path=path_names)
+    output: os.path.join(out_dir, "orthoani", "{basename}.orthoani.csv")
+    run:
+        # aggregate all csvs --> single csv
+        aggDF = pd.concat([pd.read_csv(str(csv), sep=",") for csv in input])
+        aggDF.to_csv(str(output), index=False)
+
+
+

@@ -7,6 +7,8 @@ taxonomy_csv: gtdb-rs202.taxonomy.v2.csv
 
 paths_csv: gtdb-rs202.taxonomy.paths.csv
 
+ezAAI_path: /home/ntpierce/2022-protein-kmers-workflow/EzAAI_latest.jar
+
 alphabet_info:
   nucleotide:
     ksize: [21,31,51]
