@@ -499,7 +499,7 @@ rule ezAAI_extract:
     shell:
         """
         gunzip -c {input.genome_file} > {params.tmp_fna}
-        java -jar {params.ezAAI_path} extract -i {input.genome_file} \
+        java -jar {params.ezAAI_path} extract -i {params.tmp_fna} \
                   -o {output.db} -l {params.label} > {log}
         rm {params.tmp_fna}
         """
