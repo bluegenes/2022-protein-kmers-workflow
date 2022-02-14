@@ -23,7 +23,6 @@ path2acc = paths.groupby('path')['accession'].apply(list).to_dict()
 paths.set_index("accession", inplace=True)
 path_names = path2acc.keys()
 
-#anchor_acc = pathinfo[(pathinfo["path"] == w.path) & (pathinfo["rank"] == "species")].index[0]
 
 # Grab taxonomic info (needed for signame, fastafiles)
 tax_info = pd.read_csv(config['taxonomy_csv'], header=0)
@@ -40,6 +39,15 @@ tax_info.set_index("ident", inplace=True)
 prodigal_info = pd.read_csv("gtdb-rs202.prodigal-filenames.csv", index_col=0)
 #update with prodigal filenames
 tax_info.update(prodigal_info)
+
+
+# for EzAAI, we need specific pairs, anchor x genus-acc, anchor x family-acc, etc. rank order doesn't matter though. Get from path file. 
+path_comparisons = []
+for path in path_names:
+    anchor_acc = paths.loc[(paths["path"] == path) & (paths["rank"] == "anchor")].index.values[0]
+    compare_accs = paths.loc[(paths["path"] == path) & (paths["rank"] != "anchor")].index.values.tolist()
+    these_comparisons = expand(f"{path}/{anchor_acc}_x_{{ca}}", ca = compare_accs)
+    path_comparisons += these_comparisons
 
 onstart:
     print("------------------------------")
@@ -504,18 +512,22 @@ rule ezAAI_extract:
         rm {params.tmp_fna}
         """
 
+
+# giving path dir fails .. often. Let's do specific pairs instead
 rule ezAAI_calculate:
     input:
-        dbs = lambda w: expand(os.path.join(out_dir, "EzAAI/paths", f"{w.path}", "{acc}.db"), acc = path2acc[w.path])
+        anchor_acc = os.path.join(out_dir, "EzAAI/paths", f"{path}", "{acc1}.db"),
+        compare_acc = os.path.join(out_dir, "EzAAI/paths", f"{path}", "{acc2}.db"),
+        path_dbs = lambda w: expand(os.path.join(out_dir, "EzAAI/paths", f"{w.path}", "{acc}.db"), acc = path2acc[w.path]),
         #genomes = lambda w: expand(tax_info.at[{{acc}}, "genome_fastafile"], acc = path2acc[w.path])
         #get_genomes_for_pyani
     output: 
-        tsv = os.path.join(out_dir, "EzAAI/paths", "{path}", "{path}.EzAAI.tsv"),
+        tsv = os.path.join(out_dir, "EzAAI/paths", "{path}", "{acc1}_x_{acc2}.EzAAI.tsv"),
     params:
         pathdir = lambda w: os.path.abspath(os.path.join(out_dir, 'EzAAI', 'paths', w.path)),
         ezAAI_path = config.get('ezAAI_path', "EzAAI_latest.jar")
-    log: os.path.join(logs_dir, "EzAAI/calculate/", "{path}.calculate.log")
-    benchmark: os.path.join(logs_dir, "EzAAI/calculate", "{path}.calculate.benchmark")
+    log: os.path.join(logs_dir, "EzAAI/calculate/", "{path}/{acc1}_x_{acc2}.calculate.log")
+    benchmark: os.path.join(logs_dir, "EzAAI/calculate", "{path}/{acc1}_x_{acc2}.calculate.benchmark")
     conda: "conf/env/ezaai.yml"
     threads: 1
     resources:
@@ -523,16 +535,32 @@ rule ezAAI_calculate:
         runtime=1200,
     shell:
         """
-        java -jar {params.ezAAI_path} calculate -i {params.pathdir} -j {params.pathdir} -o {output.tsv} -v > {log}
+        java -jar {params.ezAAI_path} calculate -i {input.anchor_acc} -j {input.compare_acc} -o {output.tsv} -v > {log}
         """
+        #java -jar {params.ezAAI_path} calculate -i {params.pathdir} -j {params.pathdir} -o {output.tsv} -v > {log}
         #python run_EzAAI.py {input} --pathdir {params.pathdir} --ezAAI_executable {params.ezAAI_path} --output-tsv {output} --logfile {log}  --mode "genome_input"
 
-def get_proteomes(w):
-    path_accs = path2acc[w.path]
-    path_proteomes = []
-    for acc in path_accs:
-        path_proteomes.append(tax_info.at[acc, 'protein_fastafile'])
-    return path_proteomes 
+
+rule aggregate_ezAAI:
+    input:
+        tsvs = expand(os.path.join(out_dir, "EzAAI/paths", "{path_comparison}.EzAAI.tsv"), path_comparison = path_comparisons)
+    output: 
+        os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.csv.gz")
+    log: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.aggregate.log")
+    benchmark: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.aggregate.benchmark")
+    run:    
+        # aggreate all tsvs --> single csv.gz
+        aggDF = pd.concat([pd.read_csv(str(tsv), sep="\t") for tsv in input])
+        aggDF.to_csv(str(output), index=False)
+
+
+#def get_proteomes(w):
+#    path_accs = path2acc[w.path]
+#    path_proteomes = []
+#    for acc in path_accs:
+#        path_proteomes.append(tax_info.at[acc, 'protein_fastafile'])
+#    return path_proteomes 
+
 
 
 #rule ezAAI_calculate_from_protein:
@@ -564,19 +592,6 @@ def get_proteomes(w):
     #        shell("java -jar {params.ezAAI_path} extract -i {gF} -o {this_db} -l {this_acc} >> {log}")
     #    
     #    shell("java -jar {params.ezAAI_path} calculate -i {params.pathdir} -j {params.pathdir} -o {output} >> {log}")
-
-
-rule aggregate_ezAAI:
-    input:
-        tsvs = expand(os.path.join(out_dir, "EzAAI/paths", "{path}", "{path}.EzAAI.tsv"),path = path_names)
-    output: 
-        os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.csv.gz")
-    log: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.aggregate.log")
-    benchmark: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.aggregate.benchmark")
-    run:    
-        # aggreate all tsvs --> single csv.gz
-        aggDF = pd.concat([pd.read_csv(str(tsv), sep="\t") for tsv in input])
-        aggDF.to_csv(str(output), index=False)
 
 
 #localrules: make_pyani_path_folder

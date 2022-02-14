@@ -1,3 +1,4 @@
 .snakemake
 output*
 *.csv
+.nf*
