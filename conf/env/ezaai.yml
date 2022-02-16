@@ -1,0 +1,9 @@
+name: ezaai
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - mmseqs2>=13.45111,<14
+  - prodigal=2.6.3
+

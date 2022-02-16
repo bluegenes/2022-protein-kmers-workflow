@@ -23,7 +23,6 @@ path2acc = paths.groupby('path')['accession'].apply(list).to_dict()
 paths.set_index("accession", inplace=True)
 path_names = path2acc.keys()
 
-#anchor_acc = pathinfo[(pathinfo["path"] == w.path) & (pathinfo["rank"] == "species")].index[0]
 
 # Grab taxonomic info (needed for signame, fastafiles)
 tax_info = pd.read_csv(config['taxonomy_csv'], header=0)
@@ -41,6 +40,15 @@ prodigal_info = pd.read_csv("gtdb-rs202.prodigal-filenames.csv", index_col=0)
 #update with prodigal filenames
 tax_info.update(prodigal_info)
 
+
+# for EzAAI, we need specific pairs, anchor x genus-acc, anchor x family-acc, etc. rank order doesn't matter though. Get from path file. 
+path_comparisons = []
+for path in path_names:
+    anchor_acc = paths.loc[(paths["path"] == path) & (paths["rank"] == "anchor")].index.values[0]
+    compare_accs = paths.loc[(paths["path"] == path) & (paths["rank"] != "anchor")].index.values.tolist()
+    these_comparisons = expand(f"{path}/{anchor_acc}_x_{{ca}}", ca = compare_accs)
+    path_comparisons += these_comparisons
+
 onstart:
     print("------------------------------")
     print("Estimate similarity for 'evolutionary paths' genomes, proteomes")
@@ -56,17 +64,16 @@ onerror:
 rule all:
     input: 
         # pyani
-        #expand(os.path.join(out_dir, "pyani/paths/{path}/results/matrix_identity.tab"), path=path_names)
-        os.path.join(out_dir, "pyani", f"{basename}.pyani.csv.gz")
-        #os.path.join(out_dir, "pyani", f"{basename}.pyani.csv")
+        os.path.join(out_dir, "pyani", f"{basename}.pyani-ANIm.csv.gz"),
+        os.path.join(out_dir, "pyani", f"{basename}.pyani-ANIb.csv.gz"),
+        # EzAAI
+        os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.csv.gz"),
         # orthoani
         #os.path.join(out_dir, "orthoani", f"{basename}.orthoani.csv")
-       
         
         # fastani
         #expand(os.path.join(out_dir, "fastani", "{basename}.path-fastani.csv.gz"),basename=basename),
         #expand(os.path.join(out_dir, "fastani-compare", "{basename}.fastani.tsv"), basename=basename),
-
 
         # compareM
         #os.path.join(out_dir, "compareM", "aai/aai_summary.tsv")
@@ -271,6 +278,375 @@ rule aggregate_fastani_results:
         """
 
 
+def get_genomes_for_pyani(w):
+    path_accs = path2acc[w.path]
+    path_genomes = []
+    for acc in path_accs:
+        path_genomes.append(tax_info.at[acc, 'genome_fastafile'])
+    return path_genomes 
+
+
+### split into 6-genome folders + unzip fna files and generate classes/labels, then run pyANI index and compare 
+# make a folder with just the genomes in a single path
+localrules: make_pyani_path_folder
+rule make_pyani_path_folder:
+    input:
+        get_genomes_for_pyani
+    output: 
+        classes=os.path.join(out_dir, "pyani", "paths", "{path}", "py.classes.txt"),
+        labels=os.path.join(out_dir, "pyani", "paths", "{path}", "py.labels.txt")
+    params:
+        acc_list = lambda w: path2acc[w.path],
+        pathdir = lambda w: os.path.join(out_dir, 'pyani', 'paths', w.path),
+    run:
+        import hashlib
+        os.makedirs(params.pathdir, exist_ok=True)
+        with open(output.classes, 'w') as out_classes:
+            with open(output.labels, 'w') as out_labels:
+                for acc in params.acc_list:
+                    fn = tax_info.at[acc, 'genome_fastafile']
+                    dest = os.path.join(params.pathdir, f"{acc}_genomic.fna.gz")
+                    dest_unz = os.path.join(params.pathdir, f"{acc}_genomic.fna")
+                    md5_file = os.path.join(params.pathdir, f"{acc}_genomic.md5")
+                    shell("cp {fn} {dest}")
+                    shell("gunzip -c {fn} > {dest_unz}")
+                    # get md5 of unzipped fna
+                    with open(dest_unz, "rb") as f:
+                        bytes = f.read()
+                        md5 = hashlib.md5(bytes).hexdigest()
+                    # write to md5 file
+                    with open(md5_file, 'w') as mfile:
+                        mfile.write(f"{md5}\t{dest_unz}\n")
+                    fna_base = os.path.basename(dest_unz).rsplit('.fna')[0]
+                    out_classes.write(f"{md5}\t{fna_base}\t{acc}\n")
+                    out_labels.write(f"{md5}\t{fna_base}\t{acc}\n")
+
+
+rule pyani_index_and_createdb:
+    input: 
+        os.path.join(out_dir, "pyani", "paths", "{path}", "py.classes.txt"),
+        os.path.join(out_dir, "pyani", "paths", "{path}", "py.labels.txt")
+    output:
+        classes=os.path.join(out_dir, "pyani/paths", "{path}/classes.txt"),
+        labels=os.path.join(out_dir, "pyani/paths", "{path}/labels.txt"),
+        db=os.path.join(out_dir, "pyani/paths/{path}/.pyani-{path}/pyanidb")
+    params:
+        pathdir = lambda w: os.path.join(out_dir, 'pyani/paths', w.path),
+        pyanidb = lambda w: os.path.join(out_dir, 'pyani/paths', w.path, f".pyani-{w.path}/pyanidb"),
+        classes_basename = "classes.txt",
+        labels_basename = "labels.txt"
+    log: os.path.join(logs_dir, "pyani", "{path}.index-and-createdb.log")
+    benchmark: os.path.join(logs_dir, "pyani", "{path}.index-and-createdb.benchmark")
+    conda: "conf/env/pyani0.3.yml"
+    shell:
+        """
+        pyani index -i {params.pathdir} --classes {params.classes_basename} --labels {params.labels_basename} 
+        pyani createdb --dbpath {params.pyanidb} -v -l {log}
+        """
+
+    
+rule pyANI_ANIm:
+    input:  
+        classes=os.path.join(out_dir, "pyani/paths", "{path}/py.classes.txt"),
+        labels=os.path.join(out_dir, "pyani/paths", "{path}/py.labels.txt"),
+        idx_classes=os.path.join(out_dir, "pyani/paths", "{path}/classes.txt"),
+        idx_labels=os.path.join(out_dir, "pyani/paths", "{path}/labels.txt")
+    output: 
+        directory(os.path.join(out_dir, "pyani/paths", "{path}/results/nucmer_output")),
+    threads: 1
+    resources:
+        mem_mb=lambda wildcards, attempt: attempt *5000,
+        runtime=1200,
+    params:
+        pyanidb = lambda w: os.path.join(out_dir, 'pyani/paths', w.path, f".pyani-{w.path}/pyanidb"),
+        genome_dir = lambda w: os.path.join(out_dir, 'pyani/paths', w.path),
+        output_dir = lambda w: os.path.join(out_dir, 'pyani/paths', w.path, "results"),
+    log: os.path.join(logs_dir, "pyani", "paths/{path}/{path}.pyANI-aniM.log")
+    benchmark: os.path.join(logs_dir, "pyani", "paths/{path}/{path}.pyANI-aniM.benchmark")
+    conda: "conf/env/pyani0.3.yml"
+    shell:
+        """
+        pyani anim --dbpath {params.pyanidb} --name {wildcards.path} \
+             --classes {input.classes} --labels {input.labels} \
+            -i {params.genome_dir} -o {params.output_dir} \
+            -l {log} -v
+        """
+
+rule pyANI_ANIb:
+    input:  
+        classes=os.path.join(out_dir, "pyani/paths", "{path}/py.classes.txt"),
+        labels=os.path.join(out_dir, "pyani/paths", "{path}/py.labels.txt"),
+        idx_classes=os.path.join(out_dir, "pyani/paths", "{path}/classes.txt"),
+        idx_labels=os.path.join(out_dir, "pyani/paths", "{path}/labels.txt")
+    output: 
+        covF= os.path.join(out_dir, "pyani/paths/{path}/ANIb_results", "ANIb_alignment_coverage.tab"),
+        lenF= os.path.join(out_dir, "pyani/paths/{path}/ANIb_results","ANIb_alignment_lengths.tab"),
+        hadF= os.path.join(out_dir, "pyani/paths/{path}/ANIb_results","ANIb_hadamard.tab"),
+        idF=  os.path.join(out_dir, "pyani/paths/{path}/ANIb_results","ANIb_percentage_identity.tab"),
+        seF=  os.path.join(out_dir, "pyani/paths/{path}/ANIb_results","ANIb_similarity_errors.tab"),
+        bn =  os.path.join(out_dir, "pyani/paths/{path}/ANIb_results","blastn_output.tar.gz"),
+    threads: 1
+    resources:
+        mem_mb=lambda wildcards, attempt: attempt *5000,
+        runtime=1200,
+    params:
+        #pyanidb = lambda w: os.path.join(out_dir, 'pyani/paths', w.path, f".pyani-{w.path}/pyanidb"),
+        genome_dir = lambda w: os.path.join(out_dir, 'pyani/paths', w.path),
+        output_dir = lambda w: os.path.join(out_dir, 'pyani/paths', w.path, "ANIb_results"),
+    log: os.path.join(logs_dir, "pyani", "paths/{path}/{path}.pyANI-anib.log")
+    benchmark: os.path.join(logs_dir, "pyani", "paths/{path}/{path}.pyANI-anib.benchmark")
+    conda: "conf/env/pyani0.2.yml"
+    shell:
+        """
+        average_nucleotide_identity.py -i {params.genome_dir} \
+             -o {params.output_dir} -m ANIb -v \
+             --labels {input.labels} --classes {input.classes} \
+             --force > {log}
+        """
+
+rule pyANI_report_ANIm:
+    input:  
+        os.path.join(out_dir, "pyani/paths", "{path}/results/nucmer_output"),
+    output: 
+        idF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_identity_1.tab"),
+        lenF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_aln_lengths_1.tab"),
+        covF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_coverage_1.tab"),
+        seF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_sim_errors_1.tab"),
+        hadF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_hadamard_1.tab"),
+    threads: 1
+    resources:
+        mem_mb=lambda wildcards, attempt: attempt *5000,
+        runtime=1200,
+    params:
+        ANIm_dir = lambda w: os.path.join(out_dir, 'pyani/paths', w.path, "results"),
+        pyanidb = lambda w: os.path.join(out_dir, 'pyani/paths', w.path, f".pyani-{w.path}/pyanidb"),
+    log: os.path.join(logs_dir, "pyani", "paths/{path}/{path}.pyANI-aniM.log")
+    benchmark: os.path.join(logs_dir, "pyani", "paths/{path}/{path}.pyANI-aniM.benchmark")
+    conda: "conf/env/pyani0.3.yml"
+    shell:
+        """
+        pyani report -o {params.ANIm_dir} --dbpath {params.pyanidb} --runs --run_results 1 --formats stdout -l {log}
+        pyani report -v -o {params.ANIm_dir} --formats stdout --run_matrices 1  \
+        --dbpath {params.pyanidb} -l {log}
+        """
+
+localrules: aggregate_path_anim
+rule aggregate_path_anim:
+    input:
+        idF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_identity_1.tab"),
+        lenF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_aln_lengths_1.tab"),
+        covF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_coverage_1.tab"),
+        seF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_sim_errors_1.tab"),
+        hadF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_hadamard_1.tab"),
+    output:
+        os.path.join(out_dir, "pyani/paths", "{path}/results/{path}.pyani.csv"),
+    params:
+        results_dir =  os.path.join(out_dir, "pyani/paths/{path}/results")
+    shell:
+        """
+        python conf/scripts/aggregate-pyani-results.py {params.results_dir} --path-name {wildcards.path} --output-csv {output}
+        """
+
+localrules: aggregate_path_anib
+rule aggregate_path_anib:
+    input:
+        covF= os.path.join(out_dir, "pyani/paths/{path}/ANIb_results", "ANIb_alignment_coverage.tab"),
+        lenF= os.path.join(out_dir, "pyani/paths/{path}/ANIb_results","ANIb_alignment_lengths.tab"),
+        hadF= os.path.join(out_dir, "pyani/paths/{path}/ANIb_results","ANIb_hadamard.tab"),
+        idF=  os.path.join(out_dir, "pyani/paths/{path}/ANIb_results","ANIb_percentage_identity.tab"),
+        seF=  os.path.join(out_dir, "pyani/paths/{path}/ANIb_results","ANIb_similarity_errors.tab"),
+    output:
+        os.path.join(out_dir, "pyani/paths", "{path}/ANIb_results/{path}.pyani.csv"),
+    params:
+        results_dir =  os.path.join(out_dir, "pyani/paths/{path}/ANIb_results")
+    shell:
+        """
+        python conf/scripts/aggregate-pyani-results.py {params.results_dir} --path-name {wildcards.path} --output-csv {output} --pyani-version v0.2
+        """
+
+localrules: aggregate_all_anim
+rule aggregate_all_anim:
+    input:
+        expand(os.path.join(out_dir, "pyani/paths", "{path}/results/{path}.pyani.csv"), path=path_names)
+    output:
+        os.path.join(out_dir, "pyani", "{basename}.pyani-ANIm.csv.gz")
+    run:
+        # aggreate all csv.gzs --> single csv
+        aggDF = pd.concat([pd.read_csv(str(csv), sep=",") for csv in input])
+        aggDF.to_csv(str(output), index=False)
+
+localrules: aggregate_all_anib
+rule aggregate_all_anib:
+    input:
+        expand(os.path.join(out_dir, "pyani/paths", "{path}/ANIb_results/{path}.pyani.csv"), path=path_names)
+    output:
+        os.path.join(out_dir, "pyani", "{basename}.pyani-ANIb.csv.gz")
+    run:
+        # aggreate all csv.gzs --> single csv
+        aggDF = pd.concat([pd.read_csv(str(csv), sep=",") for csv in input])
+        aggDF.to_csv(str(output), index=False)
+
+
+rule ezAAI_extract:
+    input:
+        genome_file = lambda w: tax_info.at[w.acc, 'genome_fastafile']
+    output: 
+        db = os.path.join(out_dir, "EzAAI/paths", "{path}", "{acc}.db"),
+    params:
+        #label = lambda w: tax_info.at[w.acc, 'signame']
+        label = lambda w: w.acc,
+        ezAAI_path = config.get('ezAAI_path', "EzAAI_latest.jar"),
+        tmp_fna = os.path.join(out_dir, "EzAAI/paths", "{path}", "{acc}.tmp.fna")
+    log: os.path.join(logs_dir, "EzAAI/extract/{path}", "{acc}.extract.log")
+    benchmark: os.path.join(logs_dir, "EzAAI/extract/{path}", "{acc}.extract.benchmark")
+    conda: "conf/env/ezaai.yml"
+    threads: 1
+    resources:
+        mem_mb=lambda wildcards, attempt: attempt *3000,
+        runtime=120,
+    shell:
+        """
+        gunzip -c {input.genome_file} > {params.tmp_fna}
+        java -jar {params.ezAAI_path} extract -i {params.tmp_fna} \
+                  -o {output.db} -l {params.label} > {log}
+        rm {params.tmp_fna}
+        """
+
+
+# giving path dir fails .. often. Let's do specific pairs instead
+rule ezAAI_calculate:
+    input:
+        anchor_acc = os.path.join(out_dir, "EzAAI/paths", f"{path}", "{acc1}.db"),
+        compare_acc = os.path.join(out_dir, "EzAAI/paths", f"{path}", "{acc2}.db"),
+        path_dbs = lambda w: expand(os.path.join(out_dir, "EzAAI/paths", f"{w.path}", "{acc}.db"), acc = path2acc[w.path]),
+        #genomes = lambda w: expand(tax_info.at[{{acc}}, "genome_fastafile"], acc = path2acc[w.path])
+        #get_genomes_for_pyani
+    output: 
+        tsv = os.path.join(out_dir, "EzAAI/paths", "{path}", "{acc1}_x_{acc2}.EzAAI.tsv"),
+    params:
+        pathdir = lambda w: os.path.abspath(os.path.join(out_dir, 'EzAAI', 'paths', w.path)),
+        ezAAI_path = config.get('ezAAI_path', "EzAAI_latest.jar")
+    log: os.path.join(logs_dir, "EzAAI/calculate/", "{path}/{acc1}_x_{acc2}.calculate.log")
+    benchmark: os.path.join(logs_dir, "EzAAI/calculate", "{path}/{acc1}_x_{acc2}.calculate.benchmark")
+    conda: "conf/env/ezaai.yml"
+    threads: 1
+    resources:
+        mem_mb=lambda wildcards, attempt: attempt *6000,
+        runtime=1200,
+    shell:
+        """
+        java -jar {params.ezAAI_path} calculate -i {input.anchor_acc} -j {input.compare_acc} -o {output.tsv} -v > {log}
+        """
+        #java -jar {params.ezAAI_path} calculate -i {params.pathdir} -j {params.pathdir} -o {output.tsv} -v > {log}
+        #python run_EzAAI.py {input} --pathdir {params.pathdir} --ezAAI_executable {params.ezAAI_path} --output-tsv {output} --logfile {log}  --mode "genome_input"
+
+
+rule aggregate_ezAAI:
+    input:
+        tsvs = expand(os.path.join(out_dir, "EzAAI/paths", "{path_comparison}.EzAAI.tsv"), path_comparison = path_comparisons)
+    output: 
+        os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.csv.gz")
+    log: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.aggregate.log")
+    benchmark: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.aggregate.benchmark")
+    run:    
+        # aggreate all tsvs --> single csv.gz
+        aggDF = pd.concat([pd.read_csv(str(tsv), sep="\t") for tsv in input])
+        aggDF.to_csv(str(output), index=False)
+
+
+#def get_proteomes(w):
+#    path_accs = path2acc[w.path]
+#    path_proteomes = []
+#    for acc in path_accs:
+#        path_proteomes.append(tax_info.at[acc, 'protein_fastafile'])
+#    return path_proteomes 
+
+
+
+#rule ezAAI_calculate_from_protein:
+#    input:
+#        #dbs = lambda w: expand(os.path.join(out_dir, "EzAAI/paths", f"{w.path}", "{acc}.db"), acc = path2acc[w.path])
+#        #genomes = lambda w: expand(tax_info.at[{{acc}}, "genome_fastafile"], acc = path2acc[w.path])
+#        get_proteomes
+#    output: 
+#        tsv = os.path.join(out_dir, "EzAAI/paths", "{path}", "{path}.prot.EzAAI.tsv"),
+#    params:
+#        pathdir = lambda w: os.path.abspath(os.path.join(out_dir, 'EzAAI', 'paths', w.path)),
+#        ezAAI_path = config.get('ezAAI_path', "EzAAI_latest.jar")
+#    log: os.path.join(logs_dir, "EzAAI/calculate/", "{path}.calculate.log")
+#    benchmark: os.path.join(logs_dir, "EzAAI/calculate", "{path}.calculate.benchmark")
+#    conda: "conf/env/ezaai.yml"
+#    threads: 1
+#    resources:
+#        mem_mb=lambda wildcards, attempt: attempt *3000,
+#        runtime=1200,
+#    shell:
+#        """
+#        python run_EzAAI.py {input} --pathdir {params.pathdir} --ezAAI_executable {params.ezAAI_path} --output-tsv {output} --logfile {log} --mode "protein_input"
+#        """
+    #run:
+    #    for gF in input.genomes:
+    #        this_acc = os.path.basename(gF).rsplit("_gen")[0]
+    #        this_db = os.path.join(params.pathdir, f"{this_acc}.db")
+    #        print(this_acc)
+    #        shell("java -jar {params.ezAAI_path} extract -i {gF} -o {this_db} -l {this_acc} >> {log}")
+    #    
+    #    shell("java -jar {params.ezAAI_path} calculate -i {params.pathdir} -j {params.pathdir} -o {output} >> {log}")
+
+
+#localrules: make_pyani_path_folder
+#rule make_pyani_path_folder_maybe_use_for_orthoani:
+#    input:
+#        get_genomes_for_pyani
+#        #lambda w: expand(tax_info.at[{acc}, 'genome_fastafile'], acc=path2acc[w.path])
+#    output:
+#        classes=os.path.join(out_dir, "pyani", "paths", "{path}", "py.classes.txt"),
+#        labels=os.path.join(out_dir, "pyani", "paths", "{path}", "py.labels.txt")
+#    params:
+#        acc_list = lambda w: path2acc[w.path],
+#        pathdir = lambda w: os.path.join(out_dir, 'pyani', 'paths', w.path),
+#    run:
+#        import hashlib
+#        import screed
+#        os.makedirs(params.pathdir, exist_ok=True)
+#        with open(output.classes, 'w') as out_classes:
+#            with open(output.labels, 'w') as out_labels:
+#                for acc in params.acc_list:
+#                    fn = tax_info.at[acc, 'genome_fastafile']
+#                    dest = os.path.join(params.pathdir, f"{acc}_genomic.fna.gz")
+#                    #dest_unz = os.path.join(params.pathdir, f"{acc}_genomic.fna")
+#                    unzipped_single_fasta = os.path.join(params.pathdir, f"{acc}_genomic.fna")
+#                    md5_file = os.path.join(params.pathdir, f"{acc}_genomic.md5")
+#                    shell("cp {fn} {dest}")
+#                    #shell("gunzip -c {fn} > {dest_unz}")
+#                    # get md5 of unzipped fna
+#                    #with open(dest_unz, "rb") as f:
+#                    #    bytes = f.read()
+#                    #    md5 = hashlib.md5(bytes).hexdigest()
+#                    # write to md5 file
+#                    #with open(md5_file, 'w') as mfile:
+#                    #    mfile.write(f"{md5}\t{dest_unz}\n")
+#                    #fna_base = os.path.basename(dest_unz).rsplit('.fna')[0]
+#                    # now handle single fasta aggregation
+#                    with open(unzipped_single_fasta, 'w') as sfa:
+#                        sequences=[]
+#                        with screed.open(fn) as ff:
+#                            for read in ff:
+#                                sequences.append(read.sequence)
+#                        sfa.write(f'>{acc}\n')
+#                        sfa.write("".join(sequences) + "\n")
+#                    # get md5 of this file
+#                    with open(unzipped_single_fasta, "rb") as f:
+#                        bytes = f.read()
+#                        md5 = hashlib.md5(bytes).hexdigest()
+#                    # write to md5 file
+#                    with open(single_md5_file, 'w') as mfile:
+#                        mfile.write(f"{md5}\t{unzipped_single_fasta}\n")
+#                    fna_base = os.path.basename(unzipped_single_fasta).rsplit('.fna')[0]
+#                    # write labels and classes for these files
+#                    out_classes.write(f"{md5}\t{fna_base}\t{acc}\n")
+#                    out_labels.write(f"{md5}\t{fna_base}\t{acc}\n")
+#
 def get_genomes_for_orthoani(w):
     anchor_acc = paths[(paths["path"] == w.path) & (paths["rank"] == "anchor")].index[0]
     anchor_g = tax_info.at[anchor_acc, 'genome_fastafile']
@@ -311,167 +687,4 @@ rule aggregate_orthoani:
         aggDF.to_csv(str(output), index=False)
 
 
-#rule all:
-#    input: 
-##        expand(os.path.join(out_dir, "pyani-compare", "{basename}.pyani.csv"), basename=basename),
-#         #expand(os.path.join(out_dir, "paths", "{path}/classes.txt"), path=path_names)
-#         expand(os.path.join(out_dir, "paths", "{path}/classes.txt"), path=["path1"])
 
-
-def get_genomes_for_pyani(w):
-    #anchor_acc = paths[(paths["path"] == w.path) & (paths["rank"] == "anchor")].index[0]
-    #anchor_g = tax_info.at[anchor_acc, 'genome_fastafile']
-    path_accs = path2acc[w.path]
-    path_genomes = []
-    for acc in path_accs:
-        path_genomes.append(tax_info.at[acc, 'genome_fastafile'])
-    return path_genomes 
-
-
-
-### split into 6-genome folders + unzip fna files and generate classes/labels, then run pyANI index and compare 
-# make a folder with just the genomes in a single path
-localrules: make_pyani_path_folder
-rule make_pyani_path_folder:
-    input:
-        get_genomes_for_pyani
-        #lambda w: expand(tax_info.at[{acc}, 'genome_fastafile'], acc=path2acc[w.path])
-    output: 
-        classes=os.path.join(out_dir, "pyani", "paths", "{path}", "py.classes.txt"),
-        labels=os.path.join(out_dir, "pyani", "paths", "{path}", "py.labels.txt")
-    params:
-        acc_list = lambda w: path2acc[w.path],
-        pathdir = lambda w: os.path.join(out_dir, 'pyani', 'paths', w.path),
-    run:
-        import hashlib
-        os.makedirs(params.pathdir, exist_ok=True)
-        with open(output.classes, 'w') as out_classes:
-            with open(output.labels, 'w') as out_labels:
-                for acc in params.acc_list:
-                    fn = tax_info.at[acc, 'genome_fastafile']
-                    dest = os.path.join(params.pathdir, f"{acc}_genomic.fna.gz")
-                    dest_unz = os.path.join(params.pathdir, f"{acc}_genomic.fna")
-                    md5_file = os.path.join(params.pathdir, f"{acc}_genomic.md5")
-                    shell("cp {fn} {dest}")
-                    shell("gunzip -c {fn} > {dest_unz}")
-                    # get md5 of unzipped fna
-                    with open(dest_unz, "rb") as f:
-                        bytes = f.read()
-                        md5 = hashlib.md5(bytes).hexdigest()
-                    # write to md5 file
-                    with open(md5_file, 'w') as mfile:
-                        mfile.write(f"{md5}\t{dest_unz}\n")
-                    fna_base = os.path.basename(dest_unz).rsplit('.fna')[0]
-                    out_classes.write(f"{md5}\t{fna_base}\t{acc}\n")
-                    out_labels.write(f"{md5}\t{fna_base}\t{acc}\n")
-
-
-def get_genome_info(w):
-    #anchor_acc = pathinfo[(pathinfo["path"] == w.path) & (pathinfo["rank"] == "species")].index[0]
-    acc_list = path2acc[w.path]
-    genome_files = expand(os.path.join(out_dir, "paths", w.path, "{acc}_genomic.fna.gz"), acc=acc_list)
-    #anchor_g = os.path.join(out_dir, "pyani", "{path}", f"{anchor_acc}_genomic.fna.gz")
-    return genome_files 
-    
-
-rule pyani_index_and_createdb:
-#    input: get_genome_info 
-    input: 
-      #  lambda w: expand(os.path.join(out_dir, "pyani/paths", "{{path}}/{acc}_genomic.fna"), acc=path2acc[w.path]),
-        os.path.join(out_dir, "pyani", "paths", "{path}", "py.classes.txt"),
-        os.path.join(out_dir, "pyani", "paths", "{path}", "py.labels.txt")
-    output:
-        #os.path.join(out_dir, "pyani/paths/{path}/esummary_assembly.dtd"),
-        #os.path.join(out_dir, "pyani/paths/{path}/uilist.dtd"),
-        classes=os.path.join(out_dir, "pyani/paths", "{path}/classes.txt"),
-        labels=os.path.join(out_dir, "pyani/paths", "{path}/labels.txt"),
-        db=os.path.join(out_dir, "pyani/paths/{path}/.pyani-{path}/pyanidb")
-    params:
-        pathdir = lambda w: os.path.join(out_dir, 'pyani/paths', w.path),
-        pyanidb = lambda w: os.path.join(out_dir, 'pyani/paths', w.path, f".pyani-{w.path}/pyanidb"),
-        classes_basename = "classes.txt",
-        labels_basename = "labels.txt"
-    log: os.path.join(logs_dir, "pyani", "{path}.index-and-createdb.log")
-    benchmark: os.path.join(logs_dir, "pyani", "{path}.index-and-createdb.benchmark")
-    conda: "envs/pyani0.3.yml"
-    shell:
-        """
-        pyani index -i {params.pathdir} --classes {params.classes_basename} --labels {params.labels_basename} 
-        pyani createdb --dbpath {params.pyanidb} -v -l {log}
-        """
-
-    
-rule pyANI_ANIm:
-    input:  
-        classes=os.path.join(out_dir, "pyani/paths", "{path}/classes.txt"),
-        labels=os.path.join(out_dir, "pyani/paths", "{path}/labels.txt")
-    output: 
-        directory(os.path.join(out_dir, "pyani/paths", "{path}/results/nucmer_output")),
-    threads: 1
-    resources:
-        mem_mb=lambda wildcards, attempt: attempt *5000,
-        runtime=1200,
-    params:
-        pyanidb = lambda w: os.path.join(out_dir, 'pyani/paths', w.path, f".pyani-{w.path}/pyanidb"),
-        genome_dir = lambda w: os.path.join(out_dir, 'pyani/paths', w.path),
-        output_dir = lambda w: os.path.join(out_dir, 'pyani/paths', w.path, "results"),
-    log: os.path.join(logs_dir, "pyani", "paths/{path}/{path}.pyANI-aniM.log")
-    benchmark: os.path.join(logs_dir, "pyani", "paths/{path}/{path}.pyANI-aniM.benchmark")
-    conda: "envs/pyani0.3.yml"
-    shell:
-        """
-        pyani anim --dbpath {params.pyanidb} --name {wildcards.path} \
-             --classes {input.classes} --labels {input.labels} \
-            -i {params.genome_dir} -o {params.output_dir} \
-            -l {log} -v
-        """
-
-rule pyANI_report_ANIm:
-    input:  
-        os.path.join(out_dir, "pyani/paths", "{path}/results/nucmer_output"),
-        #lambda w: expand(os.path.join(out_dir, "pyani/paths", "{{path}}/nucmer_output/{acc}"), acc= path2acc[w.path]),
-    output: 
-        idF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_identity_1.tab"),
-        lenF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_aln_lengths_1.tab"),
-        covF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_coverage_1.tab"),
-        seF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_sim_errors_1.tab"),
-        hadF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_hadamard_1.tab"),
-    threads: 1
-    resources:
-        mem_mb=lambda wildcards, attempt: attempt *5000,
-        runtime=1200,
-    params:
-        ANIm_dir = lambda w: os.path.join(out_dir, 'pyani/paths', w.path, "results"),
-    log: os.path.join(logs_dir, "pyani", "paths/{path}/{path}.pyANI-aniM.log")
-    benchmark: os.path.join(logs_dir, "pyani", "paths/{path}/{path}.pyANI-aniM.benchmark")
-    conda: "envs/pyani0.3.yml"
-    shell:
-        """
-        pyani report -v -o {params.ANIm_dir} --formats stdout --run_matrices 1 -l {log}
-        """
-
-rule aggregate_path_anim:
-    input:
-        idF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_identity_1.tab"),
-        lenF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_aln_lengths_1.tab"),
-        covF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_coverage_1.tab"),
-        seF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_sim_errors_1.tab"),
-        hadF = os.path.join(out_dir, "pyani/paths/{path}/results/matrix_hadamard_1.tab"),
-    output:
-        os.path.join(out_dir, "pyani/paths", "{path}/results/{path}.pyani.csv"),
-    params:
-        results_dir =  os.path.join(out_dir, "pyani/paths/{path}/results")
-    shell:
-        """
-        python aggregate-pyani-results.py {params.results_dir} --path-name {wildcards.path} --output-csv {output}
-        """
-
-rule aggregate_all_anim:
-    input:
-        expand(os.path.join(out_dir, "pyani/paths", "{path}/results/{path}.pyani.csv"), path=path_names)
-    output:
-        os.path.join(out_dir, "pyani", "{basename}.pyani.csv.gz")
-    run:
-        # aggreate all csv.gzs --> single csv
-        aggDF = pd.concat([pd.read_csv(str(csv), sep=",") for csv in input])
-        aggDF.to_csv(str(output), index=False)

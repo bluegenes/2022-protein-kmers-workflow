@@ -11,7 +11,7 @@ from collections import defaultdict, namedtuple
 anchorCompareM = namedtuple('anchorCompareM',
                            'comparison_name, anchor_name, compare_name, path, lowest_common_rank, mean_aai, std_aai, genes_in_anchor, genes_in_ref, orthologous_genes, orthologous_fraction')
 
-compare_ranklist = ["genus", "family", "order", "class", "order", "class", "phylum", "superkingdom"]
+compare_ranklist = ["genus", "family", "order", "class", "phylum", "superkingdom"]
 
 def main(args):
     # get basename for these sequences

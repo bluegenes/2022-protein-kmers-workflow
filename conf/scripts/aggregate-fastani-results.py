@@ -12,7 +12,7 @@ from collections import defaultdict, namedtuple
 anchorfastANI = namedtuple('anchorFastANI',
                            'comparison_name, anchor_name, compare_name, path, lowest_common_rank, fastani_ident, num_bidirectional_fragment_mappings, total_query_fragments')
 
-compare_ranklist = ["genus", "family", "order", "class", "order", "class", "phylum", "superkingdom"]
+compare_ranklist = ["genus", "family", "order", "class", "phylum", "superkingdom"]
 
 def main(args):
     # get basename for these sequences

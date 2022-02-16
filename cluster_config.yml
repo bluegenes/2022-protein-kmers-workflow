@@ -4,9 +4,10 @@ __default__:
     partition: low2 #bml
     job-name: "{rule}.w{wildcards}"
     logdir: "/home/ntpierce/2022-protein-kmers-workflow/slurm-logs"
-protein_AAI_via_compareM:
+#protein_AAI_via_compareM:
+pyANI_ANIb:
     account: ctbrowngrp
-    partition: med2 #bml
+    partition: bmm
     job-name: "{rule}.w{wildcards}"
     logdir: "/home/ntpierce/2022-protein-kmers-workflow/slurm-logs"
 

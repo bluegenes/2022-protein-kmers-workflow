@@ -12,61 +12,79 @@ from collections import defaultdict, namedtuple
 anchorpyani = namedtuple('anchorpyani',
                            'comparison_name, anchor_name, compare_name, path, lowest_common_rank, pyani_ident, pyani_coverage, pyani_aln_length, pyani_sim_errors, pyani_hadamard')
 
-compare_ranklist = ["genus", "family", "order", "class", "order", "class", "phylum", "superkingdom"]
+compare_ranklist = ["genus", "family", "order", "class", "phylum", "superkingdom"]
 
 def main(args):
     # get basename for these sequences
     anchor_results = []
     pathInfo = pd.read_csv(args.path_info, dtype=str, sep="\t", header=0)
+
+    if "3" in str(args.pyani_version):
+        len_fn= "matrix_aln_lengths_1.tab"
+        cov_fn = "matrix_coverage_1.tab"
+        had_fn = "matrix_hadamard_1.tab"
+        id_fn = "matrix_identity_1.tab"
+        se_fn = "matrix_sim_errors_1.tab"
+    elif "2" in str(args.pyani_version):
+        len_fn= "ANIb_alignment_lengths.tab"
+        cov_fn = "ANIb_alignment_coverage.tab"
+        had_fn = "ANIb_hadamard.tab"
+        id_fn = "ANIb_percentage_identity.tab"
+        se_fn = "ANIb_similarity_errors.tab"
     if args.path_name:
         select_path = args.path_name
-        pathInfo = pathInfo[pathInfo["paths"] == select_path] # subset
-    allpaths = pathInfo['paths'].unique().tolist()
-
-    #argh, passing in diff classes/labels isn't working. just convert here
-    acc2label = {}
-    if args.labels:
-        with open(args.labels, 'r') as lb:
-            for line in lb:
-                md5,fn,label=line
-                acc = fn.rsplit('_')[0]
-                acc2label[acc] = label
-    else:
-        acc2label[acc] = acc
-
-    print(acc2label)
+        pathInfo = pathInfo[pathInfo["path"] == select_path] # subset
+    allpaths = pathInfo['path'].unique().tolist()
 
     for path in allpaths:
         anchor_acc = pathInfo.loc[(pathInfo["path"] == path) & (pathInfo["rank"] == "anchor")]["accession"].values[0]
-        anchor_label = acc2label[anchor_acc]
         compare_accs = pathInfo.loc[(pathInfo["path"] == path) & (pathInfo["rank"] != "anchor")]["accession"].values.tolist()
 
-        path_results_dir = os.path.join(args.pyani_results_dir, path, results)
-        lenF = os.path.join(path_results_dir, "matrix_aln_lengths_2.tab")
-        covF = os.path.join(path_results_dir,"matrix_coverage_2.tab")
-        hadamardF = os.path.join(path_results_dir,"matrix_hadamard_2.tab")
-        identF = os.path.join(path_results_dir,"matrix_identity_2.tab")
-        simerrF = os.path.join(path_results_dir,"matrix_sim_errors_2.tab")
+        path_results_dir = args.pyani_results_dir
+        lenF = os.path.join(path_results_dir, len_fn)
+        covF = os.path.join(path_results_dir, cov_fn)
+        hadamardF = os.path.join(path_results_dir, had_fn)
+        identF = os.path.join(path_results_dir, id_fn)
+        simerrF = os.path.join(path_results_dir, se_fn)
 
-        #pathfiles = {"pyani_ident": identF, "pyani_coverage": covF, "pyani_aln_length": lenF, "pyani_sim_errors": simerrF, "pyani_hadamard": hadamardF}
         # read in all matrices
         lenD = pd.read_csv(lenF, sep="\t", header=0, index_col=0)
         covD = pd.read_csv(covF, sep="\t", header=0, index_col=0)
         hadD = pd.read_csv(hadamardF, sep="\t", header=0, index_col=0)
         idD = pd.read_csv(identF, sep="\t", header=0, index_col=0)
         seD = pd.read_csv(simerrF, sep="\t", header=0, index_col=0)
+
+        # use headers on one file to get full column names:
+        names = lenD.columns.tolist()
+        anchor_label = [x for x in names if x.startswith(anchor_acc)][0]
+
         # get info for each comparison
         for rank in compare_ranklist:
             compare_acc = pathInfo.loc[(pathInfo["path"] == path) & (pathInfo["rank"] == rank)]["accession"].values[0]
-            compare_label = acc2label[compare_acc]
+            compare_label = [x for x in names if x.startswith(compare_acc)][0]
             comparison_name = f"{anchor_acc}_x_{compare_acc}"
             pyani_ident, pyani_coverage, pyani_aln_length, pyani_sim_errors, pyani_hadamard = np.nan, np.nan, np.nan, np.nan, np.nan
-            # pyani SHOULD produce symmetrical matrix, so all accs should exist regardless of value, right?
-            pyani_ident = idD.at[anchor_label, compare_label]
-            pyani_coverage = covD.at[anchor_label, compare_label]
-            pyani_aln_length = lenD.at[anchor_label, compare_label]
-            pyani_sim_errors = seD.at[anchor_label, compare_label]
-            pyani_hadamard = hadD.at[anchor_label, compare_label]
+            # pyani SHOULD produce symmetrical matrix, so all accs should exist regardless of value, right? NO
+            # no, will not be symmetric. Average values instead.
+            pyani_identA = idD.at[anchor_label, compare_label]
+            pyani_identB = idD.at[compare_label, anchor_label]
+            pyani_ident = np.mean([pyani_identA, pyani_identB])
+
+            pyani_coverageA = covD.at[anchor_label, compare_label]
+            pyani_coverageB = covD.at[compare_label, anchor_label]
+            pyani_coverage = np.mean([pyani_coverageA, pyani_coverageB])
+
+            pyani_aln_lengthA = lenD.at[anchor_label, compare_label]
+            pyani_aln_lengthB = lenD.at[compare_label, anchor_label]
+            pyani_aln_length = np.mean([pyani_aln_lengthA, pyani_aln_lengthB])
+
+            pyani_sim_errorsA = seD.at[anchor_label, compare_label]
+            pyani_sim_errorsB = seD.at[compare_label, anchor_label]
+            pyani_sim_errors = np.mean([pyani_sim_errorsA, pyani_sim_errorsB])
+
+            pyani_hadamardA = hadD.at[anchor_label, compare_label]
+            pyani_hadamardB = hadD.at[compare_label, anchor_label]
+            pyani_hadamard = np.mean([pyani_hadamardA, pyani_hadamardB])
 
             this_info = anchorpyani(comparison_name, anchor_acc, compare_acc, path, rank, pyani_ident, pyani_coverage, pyani_aln_length, pyani_sim_errors, pyani_hadamard)
             anchor_results.append(this_info)
@@ -82,7 +100,8 @@ def cmdline(sys_args):
     "Command line entry point w/argparse action."
     p = argparse.ArgumentParser()
     p.add_argument("pyani_results_dir")
-    p.add_argument("--path-info", default="gtdb-r95-reps.pathinfo.tsv")
+    p.add_argument("--pyani-version", default = 'v0.3')
+    p.add_argument("--path-info", default="gtdb-rs202.taxonomy.paths.tsv")
     p.add_argument("--path-name") # just do the one path
     p.add_argument("--labels")
     p.add_argument("--output-csv", required=True)
