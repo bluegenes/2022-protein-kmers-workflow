@@ -2,3 +2,6 @@
 output*
 *.csv
 .nf*
+genbank_cache/
+bak/
+test_*
