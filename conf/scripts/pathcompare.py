@@ -9,9 +9,11 @@ import pandas as pd
 import sourmash
 from sourmash import load_one_signature
 
+# catch warnings
+import warnings
 
 
-CompareResult = namedtuple('CompareResult','comparison_name, anchor_name, compare_name, path, lowest_common_rank, alphabet, ksize, scaled, jaccard, max_containment, anchor_containment, compare_containment, anchor_hashes, compare_hashes, num_common, jaccard_ani, jani_low, jani_high, containA_ani, containAani_low, containAani_high, containBani, containBani_low, containBani_high, mcANI, mcANI_low, mcANI_high')
+CompareResult = namedtuple('CompareResult','comparison_name, anchor_name, compare_name, path, lowest_common_rank, alphabet, ksize, scaled, jaccard, max_containment, anchor_containment, compare_containment, anchor_hashes, compare_hashes, num_common, jaccard_ani, jani_low, jani_high, containA_ani, containAani_low, containAani_high, containBani, containBani_low, containBani_high, mcANI, mcANI_low, mcANI_high, jaccard_warning')
 
 def compare_mh(mhA, mhB, A_name, B_name, lowest_common_rank, path_name, alpha, ksize, scaled):
     comparison_name = f"{A_name}_x_{B_name}"
@@ -22,15 +24,20 @@ def compare_mh(mhA, mhB, A_name, B_name, lowest_common_rank, path_name, alpha, k
     containA = mhA.contained_by(mhB)
     containB = mhB.contained_by(mhA)
     max_contain = max(containA,containB)
+    jaccard_warning_encountered=False
     # get ANI values
-    jaccard_ani,jani_low,jani_high = mhA.jaccard_ani(mhB, jaccard=jaccard)
     containAani,containAani_low,containAani_high = mhA.containment_ani(mhA, containment=containA)
     containBani,containBani_low,containBani_high= mhB.containment_ani(mhA, containment=containB)
     mcANI,mcANI_low,mcANI_high = mhA.max_containment_ani(mhB, max_containment=max_contain)
+    # figure out when jaccard RuntimeWarnings happen by catching warnings
+    with warnings.catch_warnings(record=True) as w:
+        jaccard_ani,jani_low,jani_high = mhA.jaccard_ani(mhB, jaccard=jaccard)
+        if len(w) > 0:
+            jaccard_warning_encountered=True
     return CompareResult(comparison_name, A_name, B_name, path_name, lowest_common_rank, alpha, ksize,
                          scaled, jaccard, max_contain, containA, containB, A_hashes, B_hashes, intersect_numhashes,
                          jaccard_ani, jani_low, jani_high, containAani, containAani_low, containAani_high,
-                         containBani, containBani_low, containBani_high, mcANI, mcANI_low, mcANI_high)
+                         containBani, containBani_low, containBani_high, mcANI, mcANI_low, mcANI_high, jaccard_warning_encountered)
 
 
 def find_sigfile(accession, sigdir, alphabet):
@@ -82,17 +89,6 @@ def main(args):
     paths = list(pathinfo["path"].drop_duplicates())
     groupbyPath = pathinfo.groupby('path')
 
-    # load taxonomic info (for signames, etc)
-    #tax_info = pd.read_csv(args.taxonomy_csv, header=0)
-    ## subset tax info to just path accessions
-    #import pdb;pdb.set_trace()
-    #tax_info = tax_info[tax_info['ident'].isin(pathinfo['accession'].tolist())
-
-    # add signame
-    #tax_info['signame'] = tax_info['ident'] + ' ' + tax_info['species']
-    # set index
-    #tax_info.set_index("ident", inplace=True)
-
     rank_order = ["genus", "family", "order", "class", "phylum", "superkingdom"]
     path_comparisons = []
 
@@ -133,7 +129,6 @@ def cmdline(sys_args):
     "Command line entry point w/argparse action."
     p = argparse.ArgumentParser()
     p.add_argument("--paths-csv", required=True)
-    #p.add_argument("--taxonomy-csv", default="gtdb-rs202.taxonomy.v2.csv")
     p.add_argument('--sigdir', default = "")
     p.add_argument("-k", "--ksize",  type=int)
     p.add_argument("--alphabet")
