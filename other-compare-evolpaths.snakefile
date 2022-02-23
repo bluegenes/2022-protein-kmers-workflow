@@ -67,6 +67,7 @@ rule all:
         os.path.join(out_dir, "pyani", f"{basename}.pyani-ANIm.csv.gz"),
         os.path.join(out_dir, "pyani", f"{basename}.pyani-ANIb.csv.gz"),
         # EzAAI
+        #expand(os.path.join(out_dir, "EzAAI/databases", "{acc}.db"), acc = ACCS)
         os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.csv.gz"),
         # orthoani
         #os.path.join(out_dir, "orthoani", f"{basename}.orthoani.csv")
@@ -491,14 +492,14 @@ rule ezAAI_extract:
     input:
         genome_file = lambda w: tax_info.at[w.acc, 'genome_fastafile']
     output: 
-        db = os.path.join(out_dir, "EzAAI/paths", "{path}", "{acc}.db"),
+        db = os.path.join(out_dir, "EzAAI/databases", "{acc}.db"),
     params:
         #label = lambda w: tax_info.at[w.acc, 'signame']
         label = lambda w: w.acc,
         ezAAI_path = config.get('ezAAI_path', "EzAAI_latest.jar"),
-        tmp_fna = os.path.join(out_dir, "EzAAI/paths", "{path}", "{acc}.tmp.fna")
-    log: os.path.join(logs_dir, "EzAAI/extract/{path}", "{acc}.extract.log")
-    benchmark: os.path.join(logs_dir, "EzAAI/extract/{path}", "{acc}.extract.benchmark")
+        tmp_fna = os.path.join(out_dir, "EzAAI/databases", "{acc}.tmp.fna")
+    log: os.path.join(logs_dir, "EzAAI/extract/", "{acc}.extract.log")
+    benchmark: os.path.join(logs_dir, "EzAAI/extract/", "{acc}.extract.benchmark")
     conda: "conf/env/ezaai.yml"
     threads: 1
     resources:
@@ -514,13 +515,11 @@ rule ezAAI_extract:
 
 
 # giving path dir fails .. often. Let's do specific pairs instead
+# plus then we only build one db for each fna file
 rule ezAAI_calculate:
     input:
-        anchor_acc = os.path.join(out_dir, "EzAAI/paths", f"{path}", "{acc1}.db"),
-        compare_acc = os.path.join(out_dir, "EzAAI/paths", f"{path}", "{acc2}.db"),
-        path_dbs = lambda w: expand(os.path.join(out_dir, "EzAAI/paths", f"{w.path}", "{acc}.db"), acc = path2acc[w.path]),
-        #genomes = lambda w: expand(tax_info.at[{{acc}}, "genome_fastafile"], acc = path2acc[w.path])
-        #get_genomes_for_pyani
+        anchor_acc = os.path.join(out_dir, "EzAAI/databases", "{acc1}.db"),
+        compare_acc = os.path.join(out_dir, "EzAAI/databases", "{acc2}.db"),
     output: 
         tsv = os.path.join(out_dir, "EzAAI/paths", "{path}", "{acc1}_x_{acc2}.EzAAI.tsv"),
     params:
@@ -529,13 +528,14 @@ rule ezAAI_calculate:
     log: os.path.join(logs_dir, "EzAAI/calculate/", "{path}/{acc1}_x_{acc2}.calculate.log")
     benchmark: os.path.join(logs_dir, "EzAAI/calculate", "{path}/{acc1}_x_{acc2}.calculate.benchmark")
     conda: "conf/env/ezaai.yml"
-    threads: 1
+    threads: 10
     resources:
-        mem_mb=lambda wildcards, attempt: attempt *6000,
+        mem_mb=lambda wildcards, attempt: attempt *3000,
         runtime=1200,
     shell:
         """
-        java -jar {params.ezAAI_path} calculate -i {input.anchor_acc} -j {input.compare_acc} -o {output.tsv} -v > {log}
+        java -jar {params.ezAAI_path} calculate -i {input.anchor_acc} -j {input.compare_acc} \
+                  -t {threads} -o {output.tsv} -v >> {log} 2>&1
         """
         #java -jar {params.ezAAI_path} calculate -i {params.pathdir} -j {params.pathdir} -o {output.tsv} -v > {log}
         #python run_EzAAI.py {input} --pathdir {params.pathdir} --ezAAI_executable {params.ezAAI_path} --output-tsv {output} --logfile {log}  --mode "genome_input"

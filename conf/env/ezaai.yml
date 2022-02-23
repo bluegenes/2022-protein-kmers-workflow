@@ -6,4 +6,4 @@ channels:
 dependencies:
   - mmseqs2>=13.45111,<14
   - prodigal=2.6.3
-
+  - blast>=2.12,<3
