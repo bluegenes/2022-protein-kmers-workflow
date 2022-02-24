@@ -73,6 +73,7 @@ def main(args):
     scaled_vals.sort() # ascending order
     ksize = args.ksize
     sigdir = args.sigdir
+    translated_sigdir = args.translated_sigdir
 
     select_ksize = ksize
     if is_protein:
@@ -108,7 +109,10 @@ def main(args):
             path_comparisons = []
             for lowest_common_rank in rank_order:
                 compare_acc = groupInfo.at[lowest_common_rank, "accession"]
-                compare_sigfile = find_sigfile(compare_acc, sigdir, alphabet)
+                if args.compare_translated:
+                    compare_sigfile = find_sigfile(compare_acc, translated_sigdir, alphabet)
+                else:
+                    compare_sigfile = find_sigfile(compare_acc, sigdir, alphabet)
                 # select and load comparison sig
                 compare_sig = load_one_signature(compare_sigfile, ksize=select_ksize)
                 compare_sig.minhash = compare_sig.minhash.to_mutable()
@@ -130,10 +134,12 @@ def cmdline(sys_args):
     p = argparse.ArgumentParser()
     p.add_argument("--paths-csv", required=True)
     p.add_argument('--sigdir', default = "")
+    p.add_argument('--translated-sigdir', default = "")
     p.add_argument("-k", "--ksize",  type=int)
     p.add_argument("--alphabet")
     p.add_argument("--scaled", nargs='*', default=[1])
     p.add_argument("--path")
+    p.add_argument("--compare-translated", action="store_true")
     p.add_argument("--output")
     args = p.parse_args()
     return main(args)
