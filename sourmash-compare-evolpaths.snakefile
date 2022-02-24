@@ -17,6 +17,10 @@ logs_dir = os.path.join(out_dir, "logs")
 pathinfo_file = config["paths_csv"]
 paths = pd.read_csv(pathinfo_file, dtype=str, sep="\t", header=0)
 ACCS = paths['accession'].unique().tolist()
+
+# for sketch translate, need to translate all non-anchor accs:
+COMPARE_ACCS = paths[paths["rank"] != "anchor"]["accession"].tolist()
+
 # path: accessions dict
 path2acc = paths.groupby('path')['accession'].apply(list).to_dict()
 paths.set_index("accession", inplace=True)
@@ -61,8 +65,8 @@ for alpha, info in alphabet_info.items():
 
 rule all:
     input:
-        os.path.join(out_dir, "path-compare", f"{basename}.pathcompare.csv.gz"),
-#        os.path.join(out_dir, "path-compare-translate", f"{basename}.pathcompare.csv.gz")
+#        os.path.join(out_dir, "path-compare", f"{basename}.pathcompare.csv.gz"),
+        os.path.join(out_dir, "path-compare-translate", f"{basename}.pathcompare-translate.csv.gz")
 
 def make_param_str(ksizes, scaled):
     ks = [ f'k={k}' for k in ksizes ]
@@ -81,7 +85,7 @@ rule sketch_nucl:
     threads: 1
     resources:
         mem_mb=lambda wildcards, attempt: attempt *6000,
-        runtime=1200,
+        runtime=90,
     log: os.path.join(logs_dir, "sourmash_sketch_genomic", "{acc}.sketch.log")
     benchmark: os.path.join(logs_dir, "sourmash_sketch_genomic", "{acc}.sketch.benchmark")
     conda: "conf/env/sourmash.yml"
@@ -100,7 +104,7 @@ rule sketch_prot:
     threads: 1
     resources:
         mem_mb=lambda wildcards, attempt: attempt *3000,
-        runtime=1200,
+        runtime=90,
     log: os.path.join(logs_dir, "sourmash_sketch_protein", "{acc}.sketch.log")
     benchmark: os.path.join(logs_dir, "sourmash_sketch_protein", "{acc}.sketch.benchmark")
     conda: "conf/env/sourmash.yml"
@@ -118,8 +122,8 @@ rule sketch_translate:
         signame = lambda w: tax_info.at[w.acc, "signame"],
     threads: 1
     resources:
-        mem_mb=lambda wildcards, attempt: attempt *3000,
-        runtime=1200,
+        mem_mb=lambda wildcards, attempt: attempt *20000,
+        runtime=300,
     log: os.path.join(logs_dir, "sourmash_sketch_translate", "{acc}.sketch.log")
     benchmark: os.path.join(logs_dir, "sourmash_sketch_translate", "{acc}.sketch.benchmark")
     conda: "conf/env/sourmash.yml"
@@ -144,7 +148,7 @@ rule signames_to_file:
 localrules: translate_signames_to_file
 rule translate_signames_to_file:
     input:
-        expand(os.path.join(out_dir, "sketch_translate", "{acc}.protein.sig"), acc=ACCS)
+        expand(os.path.join(out_dir, "sketch_translate", "{acc}.protein.sig"), acc=COMPARE_ACCS)
     output: os.path.join(out_dir, f"{basename}.translate.protein.siglist.txt")
     run:
         with open(str(output), "w") as outF:
@@ -165,7 +169,7 @@ rule compare_paths:
     threads: 1
     resources:
         mem_mb=lambda wildcards, attempt: attempt *3000,
-        runtime=1200,
+        runtime=30,
     conda: "conf/env/sourmash-dist.yml"
     log: f"{logs_dir}/path-compare/{{path}}.{{alphabet}}-k{{ksize}}.pathcompare.log"
     benchmark: f"{logs_dir}/path-compare/{{path}}.{{alphabet}}-k{{ksize}}.pathcompare.benchmark",
@@ -189,6 +193,68 @@ rule aggregate_pathcompare:
         aggDF.to_csv(str(output), index=False)
 
 
+#def get_path_sigfiles(w):
+#    anchor_acc = paths[(paths["path"] == w.path) & (paths["rank"] == "anchor")].index[0]
+#    anchor_sig = os.path.join(out_dir, "sketch_translate", f"{anchor_acc}.protein.sig"
+#
+#    path_accs = paths[(paths["path"] == w.path) & (paths["rank"] != "anchor")].index[0]
+#    path_sigs = expand(os.path.join(out_dir, "sketch_translate", "{acc}.protein.sig"), acc = path_accs)
+#
+#    return {"anchor_sig": anchor_sig, "path_sigs": path_sigs}
+
+
+#rule prefetch_compare_path_translate:
+#    input: 
+#        get_path_sigfiles
+#    output: 
+#        f"{out_dir}/path-compare-translate/{{path}}.{{alphabet}}-k{{ksize}}-scaled{{scaled}}.prefetch-compare.csv"
+#    threads: 1
+#    resources:
+#        mem_mb=lambda wildcards, attempt: attempt *3000,
+#        runtime=1200,
+#    conda: "conf/env/sourmash-dist.yml"
+#    log: f"{logs_dir}/path-compare-translate/{{path}}.{{alphabet}}-k{{ksize}}-scaled{{scaled}}.pathcompare.log"
+#    benchmark: f"{logs_dir}/path-compare-translate/{{path}}.{{alphabet}}-k{{ksize}}-scaled{{scaled}}.pathcompare.benchmark",
+#    shell:
+#        """
+#        sourmash prefetch {input.anchor_sig} {input.path_sigs} \
+#                 -o {output} -k {wildcards.ksize} --protein \
+#                 --threshold-bp=0 --scaled {wildcards.scaled} > {log} 2>&1
+#
+#        touch {output} # touch output just in case no similarity
+#        """
+
+#localrules: aggregate_pathcompare_translate
+#rule aggregate_pathcompare_translate:
+#    input:
+#        expand(f"{out_dir}/path-compare-translate/{{path}}.{{aks}}.prefetch-compare.csv", path = path_names, aks == prot_alpha_ksize_scaled)
+#    output:
+#        os.path.join(out_dir, "path-compare-translate", "{basename}.prefetch.pathcompare.csv.gz")
+#    run:
+#        # aggregate all csvs --> single csv. Add path name
+#        all_pathinfo = []
+#        for prefetch_csv in input:
+#            path_name = os.path.basename(prefetch_csv).split('.', 1)[0]
+#            this_info = pd.read_csv(str(prefetch_csv))
+#            this_info["alpha-ksize"] = this_info["moltype"] + '-' + this_info["ksize"]
+#            this_info["path"] = path_name
+             # CHECK THAT THESE WORK! 
+             #this_info["comparison_name"] = this_info["query_name"].str.split(' ')[0] + "_x_" + this_info["match_name"].str.split(' ')[0]
+             # match_name = this_info["match_name"].str.split(' ')[0]
+             #compare_rank = paths.at[match_name, "rank"]
+             #this_info["lowest_common_rank"] = compare_rank 
+             #this_info["c"] =
+             #all_pathinfo.append(this_info)
+#        aggDF= pd.concat(all_pathinfo)
+#        aggDF.to_csv(str(output), index=False)
+#
+#       
+#
+##       path_name,alphabet,ksize,scaled =  re.search(os.path.basename(prefetch_csv), "(\S+)\.(\S+)-k(\d+)-scaled(\d+)")
+#        aggDF = pd.concat([pd.read_csv(str(csv), sep=",") for csv in input])
+#        aggDF["alpha-ksize"] = aggDF["alphabet"] + "-" + aggDF["ksize"].astype(str)
+#        aggDF.to_csv(str(output), index=False)
+
 rule compare_paths_translate:
     input: 
         siglist= os.path.join(out_dir, f"{basename}.translate.protein.siglist.txt"),
@@ -196,20 +262,21 @@ rule compare_paths_translate:
     output: 
         f"{out_dir}/path-compare-translate/{{path}}.{{alphabet}}-k{{ksize}}.pathcompare.csv"
     params:
-        sigdir = os.path.join(out_dir, "sketch_translate"),
+        sigdir = os.path.join(out_dir, "sketch"),
+        translate_sigdir = os.path.join(out_dir, "sketch_translate"),
         scaled = lambda w: " ".join(str(x) for x in alphabet_info[w.alphabet]["scaled"])
     threads: 1
     resources:
         mem_mb=lambda wildcards, attempt: attempt *3000,
-        runtime=1200,
+        runtime=30,
     conda: "conf/env/sourmash-dist.yml"
     log: f"{logs_dir}/path-compare-translate/{{path}}.{{alphabet}}-k{{ksize}}.pathcompare.log"
     benchmark: f"{logs_dir}/path-compare-translate/{{path}}.{{alphabet}}-k{{ksize}}.pathcompare.benchmark",
     shell:
         """
         python conf/scripts/pathcompare.py --paths-csv {input.paths} -k {wildcards.ksize} --alphabet {wildcards.alphabet} \
-                                         --path {wildcards.path} --output {output} --sigdir {params.sigdir} \
-                                         --scaled {params.scaled} 2> {log}
+                                         --path {wildcards.path} --compare-translated --output {output} --sigdir {params.sigdir} \
+                                         --translated-sigdir {params.translate_sigdir} --scaled {params.scaled} 2> {log}
         """
 
 localrules: aggregate_pathcompare_translate
@@ -217,7 +284,7 @@ rule aggregate_pathcompare_translate:
     input:
         expand(os.path.join(out_dir, "path-compare-translate", "{basename}.{alphak}.pathcompare.csv"), basename=basename, alphak=prot_alpha_ksizes)
     output:
-        os.path.join(out_dir, "path-compare-translate", "{basename}.pathcompare.csv.gz")
+        os.path.join(out_dir, "path-compare-translate", "{basename}.pathcompare-translate.csv.gz")
     run:
         # aggregate all csvs --> single csv
         aggDF = pd.concat([pd.read_csv(str(csv), sep=",") for csv in input])
