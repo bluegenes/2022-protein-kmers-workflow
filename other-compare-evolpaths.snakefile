@@ -21,6 +21,7 @@ ACCS = paths['accession'].unique().tolist()
 # path: accessions dict
 path2acc = paths.groupby('path')['accession'].apply(list).to_dict()
 paths.set_index("accession", inplace=True)
+anchor_paths = paths[paths["rank"] == "anchor"]
 path_names = path2acc.keys()
 
 
@@ -566,7 +567,7 @@ rule aggregate_ezAAI:
         aggDF.drop(columns=drop_cols, inplace=True)
         aggDF["comparison_name"] = aggDF["anchor_name"] + "_x_" + aggDF["compare_name"]
         def acc2path(anchor_acc):
-            return paths.at[anchor_acc, "path"]
+            return anchor_paths.at[anchor_acc, "path"]
         aggDF["path"] = aggDF["anchor_name"].apply(acc2path)
         aggDF.to_csv(str(output), index=False)
 
@@ -617,7 +618,7 @@ rule aggregate_ezAAI_BLAST:
         aggDF.drop(columns=drop_cols, inplace=True)
         aggDF["comparison_name"] = aggDF["anchor_name"] + "_x_" + aggDF["compare_name"]
         def acc2path(anchor_acc):
-            return paths.at[anchor_acc, "path"]
+            return anchor_paths.at[anchor_acc, "path"]
         aggDF["path"] = aggDF["anchor_name"].apply(acc2path)
         aggDF.to_csv(str(output), index=False)
 
