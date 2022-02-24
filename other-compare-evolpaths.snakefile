@@ -68,7 +68,8 @@ rule all:
         os.path.join(out_dir, "pyani", f"{basename}.pyani-ANIb.csv.gz"),
         # EzAAI
         #expand(os.path.join(out_dir, "EzAAI/databases", "{acc}.db"), acc = ACCS)
-        os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.csv.gz"),
+        os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.MMSeqs2.csv.gz"),
+        #os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.BLAST.csv.gz"),
         # orthoani
         #os.path.join(out_dir, "orthoani", f"{basename}.orthoani.csv")
         
@@ -544,13 +545,80 @@ rule ezAAI_calculate:
 rule aggregate_ezAAI:
     input:
         tsvs = expand(os.path.join(out_dir, "EzAAI/paths", "{path_comparison}.EzAAI.tsv"), path_comparison = path_comparisons)
-    output: 
-        os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.csv.gz")
-    log: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.aggregate.log")
-    benchmark: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.aggregate.benchmark")
-    run:    
+    output:
+        os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.MMSeqs2.csv.gz")
+    log: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.MMSeqs2.aggregate.log")
+    benchmark: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.MMSeqs2.aggregate.benchmark")
+    run:
         # aggreate all tsvs --> single csv.gz
         aggDF = pd.concat([pd.read_csv(str(tsv), sep="\t") for tsv in input])
+        rename_cols = {"Label 1": "anchor_name",
+                       "Label 2": "compare_name",
+                       "AAI": "EzAAIm AAI",
+                       "CDS count 1": "EzAAIm anchor CDS count",
+                       "CDS count 2": "EzAAIm compare CDS count",
+                       "Matched count": "EzAAIm matched CDS count",
+                       "Proteome cov.": "EzAAIm proteome coverage",
+                       "ID param.": "EzAAIm id threshold",
+                       "Cov. param.": "EzAAIm coverage threshold"}
+        drop_cols = ["ID 1", "ID 2"]
+        aggDF.rename(columns=rename_cols, inplace=True)
+        aggDF.drop(columns=drop_cols, inplace=True)
+        aggDF["comparison_name"] = aggDF["anchor_name"] + "_x_" + aggDF["compare_name"]
+        def acc2path(anchor_acc):
+            return paths.at[anchor_acc, "path"]
+        aggDF["path"] = aggDF["anchor_name"].apply(acc2path)
+        aggDF.to_csv(str(output), index=False)
+
+
+rule ezAAI_calculate_BLAST:
+    input:
+        anchor_acc = os.path.join(out_dir, "EzAAI/databases", "{acc1}.db"),
+        compare_acc = os.path.join(out_dir, "EzAAI/databases", "{acc2}.db"),
+    output:
+        tsv = os.path.join(out_dir, "EzAAI/paths", "{path}", "{acc1}_x_{acc2}.EzAAI.BLAST.tsv"),
+    params:
+        pathdir = lambda w: os.path.abspath(os.path.join(out_dir, 'EzAAI', 'paths', w.path)),
+        ezAAI_path = config.get('ezAAI_path', "EzAAI_latest.jar")
+    log: os.path.join(logs_dir, "EzAAI/calculate/", "{path}/{acc1}_x_{acc2}.BLAST.calculate.log")
+    benchmark: os.path.join(logs_dir, "EzAAI/calculate", "{path}/{acc1}_x_{acc2}.BLAST.calculate.benchmark")
+    conda: "conf/env/ezaai.yml"
+    threads: 10
+    resources:
+        mem_mb=lambda wildcards, attempt: attempt *3000,
+        runtime=1200,
+    shell:
+        """
+        java -jar {params.ezAAI_path} calculate -i {input.anchor_acc} -j {input.compare_acc} \
+                  -t {threads} -p blastp -o {output.tsv} -v >> {log} 2>&1
+        """
+
+rule aggregate_ezAAI_BLAST:
+    input:
+        tsvs = expand(os.path.join(out_dir, "EzAAI/paths", "{path_comparison}.EzAAI.BLAST.tsv"), path_comparison = path_comparisons)
+    output:
+        os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.BLAST.csv.gz")
+    log: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.aggregate.BLAST.log")
+    benchmark: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.aggregate.BLAST.benchmark")
+    run:
+        # aggreate all tsvs --> single csv.gz
+        aggDF = pd.concat([pd.read_csv(str(tsv), sep="\t") for tsv in input])
+        rename_cols = {"Label 1": "anchor_name",
+                       "Label 2": "compare_name",
+                       "AAI": "EzAAIb AAI",
+                       "CDS count 1": "EzAAIb anchor CDS count",
+                       "CDS count 2": "EzAAIb compare CDS count",
+                       "Matched count": "EzAAIb matched CDS count",
+                       "Proteome cov.": "EzAAIb proteome coverage",
+                       "ID param.": "EzAAIb id threshold",
+                       "Cov. param.": "EzAAIb coverage threshold"}
+        drop_cols = ["ID 1", "ID 2"]
+        aggDF.rename(columns=rename_cols, inplace=True)
+        aggDF.drop(columns=drop_cols, inplace=True)
+        aggDF["comparison_name"] = aggDF["anchor_name"] + "_x_" + aggDF["compare_name"]
+        def acc2path(anchor_acc):
+            return paths.at[anchor_acc, "path"]
+        aggDF["path"] = aggDF["anchor_name"].apply(acc2path)
         aggDF.to_csv(str(output), index=False)
 
 
