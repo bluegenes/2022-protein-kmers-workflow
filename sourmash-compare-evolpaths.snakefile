@@ -122,8 +122,11 @@ rule sketch_translate:
         signame = lambda w: tax_info.at[w.acc, "signame"],
     threads: 1
     resources:
-        mem_mb=lambda wildcards, attempt: attempt *20000,
-        runtime=300,
+        mem_mb=lambda wildcards, attempt: attempt *9000, #18000
+        disk_mb=6000,
+        time=6000,
+        runtime=6000,
+        partition="med2",
     log: os.path.join(logs_dir, "sourmash_sketch_translate", "{acc}.sketch.log")
     benchmark: os.path.join(logs_dir, "sourmash_sketch_translate", "{acc}.sketch.benchmark")
     conda: "conf/env/sourmash.yml"

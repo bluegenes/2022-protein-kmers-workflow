@@ -69,8 +69,8 @@ rule all:
         os.path.join(out_dir, "pyani", f"{basename}.pyani-ANIb.csv.gz"),
         # EzAAI
         #expand(os.path.join(out_dir, "EzAAI/databases", "{acc}.db"), acc = ACCS)
-        os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.MMSeqs2.csv.gz"),
-        #os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.BLAST.csv.gz"),
+        #os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.MMSeqs2.csv.gz"),
+        os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.BLAST.defaultthresh.csv.gz"),
         # orthoani
         #os.path.join(out_dir, "orthoani", f"{basename}.orthoani.csv")
         
@@ -577,12 +577,12 @@ rule ezAAI_calculate_BLAST:
         anchor_acc = os.path.join(out_dir, "EzAAI/databases", "{acc1}.db"),
         compare_acc = os.path.join(out_dir, "EzAAI/databases", "{acc2}.db"),
     output:
-        tsv = os.path.join(out_dir, "EzAAI/paths", "{path}", "{acc1}_x_{acc2}.EzAAI.BLAST.tsv"),
+        tsv = os.path.join(out_dir, "EzAAI/paths", "{path}", "{acc1}_x_{acc2}.EzAAI.BLAST.defaultthresh.tsv"),
     params:
         pathdir = lambda w: os.path.abspath(os.path.join(out_dir, 'EzAAI', 'paths', w.path)),
         ezAAI_path = config.get('ezAAI_path', "EzAAI_latest.jar")
-    log: os.path.join(logs_dir, "EzAAI/calculate/", "{path}/{acc1}_x_{acc2}.BLAST.calculate.log")
-    benchmark: os.path.join(logs_dir, "EzAAI/calculate", "{path}/{acc1}_x_{acc2}.BLAST.calculate.benchmark")
+    log: os.path.join(logs_dir, "EzAAI/calculate/", "{path}/{acc1}_x_{acc2}.BLAST.defaultthresh.calculate.log")
+    benchmark: os.path.join(logs_dir, "EzAAI/calculate", "{path}/{acc1}_x_{acc2}.BLAST.defaultthresh.calculate.benchmark")
     conda: "conf/env/ezaai.yml"
     threads: 10
     resources:
@@ -593,14 +593,16 @@ rule ezAAI_calculate_BLAST:
         java -jar {params.ezAAI_path} calculate -i {input.anchor_acc} -j {input.compare_acc} \
                   -t {threads} -p blastp -o {output.tsv} -v >> {log} 2>&1
         """
+        # -id 0.3 -cov 0.3
 
 rule aggregate_ezAAI_BLAST:
     input:
-        tsvs = expand(os.path.join(out_dir, "EzAAI/paths", "{path_comparison}.EzAAI.BLAST.tsv"), path_comparison = path_comparisons)
+        #tsvs = expand(os.path.join(out_dir, "EzAAI/paths", "{path_comparison}.EzAAI.BLAST.tsv"), path_comparison = path_comparisons)
+        tsvs = expand(os.path.join(out_dir, "EzAAI/paths", "{path_comparison}.EzAAI.BLAST.defaultthresh.tsv"), path_comparison = path_comparisons)
     output:
-        os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.BLAST.csv.gz")
-    log: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.aggregate.BLAST.log")
-    benchmark: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.aggregate.BLAST.benchmark")
+        os.path.join(out_dir, "EzAAI", f"{basename}.EzAAI.BLAST.defaultthresh.csv.gz")
+    log: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.aggregate.BLAST.defaultthresh.log")
+    benchmark: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.aggregate.BLAST.defaultthresh.benchmark")
     run:
         # aggreate all tsvs --> single csv.gz
         aggDF = pd.concat([pd.read_csv(str(tsv), sep="\t") for tsv in input])
