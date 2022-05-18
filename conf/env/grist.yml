@@ -1,0 +1,11 @@
+name: grist
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.9
+  - pandas=1.4.2
+  - pip
+  - pip:
+    - git+https://github.com/dib-lab/genome-grist@latest

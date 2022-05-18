@@ -19,19 +19,11 @@ metagenome_trim_memory: 20e9
 prefetch_memory: 65e9
 
 sourmash_database_ksize: 10
-sourmash_database_threshold_bp: 30000
+sourmash_database_threshold_bp: 3000
 sourmash_databases:
-- /group/ctbrowngrp/gtdb/databases/gtdb-rs202.protein.protein.k10.sbt.zip
-#- /group/ctbrowngrp/gtdb/databases/gtdb-rs202.protein.protein-k7-scaled200.zip
-#- /group/ctbrowngrp/gtdb/databases/gtdb-rs202.protein-k10.scaled100.zip
-#- /group/ctbrowngrp/genbank/genbank-2020.07-archaea-k31.zip
-#- /group/ctbrowngrp/genbank/genbank-2020.07-bacteria-k31.zip
-#- /group/ctbrowngrp/genbank/genbank-2020.07-fungi-k31.zip
-#- /group/ctbrowngrp/genbank/genbank-2020.07-protozoa-k31.zip
-#- /group/ctbrowngrp/genbank/genbank-2020.07-viral-k31.zip
+- /group/ctbrowngrp/sourmash-db/gtdb-rs207/gtdb-rs207.protein.k10.sbt.zip
 
 taxonomies:
--  /group/ctbrowngrp/gtdb/gtdb-rs202.taxonomy.v2.with-strain.csv
-#- /group/ctbrowngrp/genbank/all_genbank_lineages.20200727.csv
+- /group/ctbrowngrp/sourmash-db/gtdb-rs207/gtdb-rs207.taxonomy.with-strain.csv.gz
 
 gather_memory: 3000
