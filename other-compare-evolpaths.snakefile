@@ -41,7 +41,6 @@ prodigal_info = pd.read_csv("gtdb-rs202.prodigal-filenames.csv", index_col=0)
 #update with prodigal filenames
 tax_info.update(prodigal_info)
 
-
 # for EzAAI, we need specific pairs, anchor x genus-acc, anchor x family-acc, etc. rank order doesn't matter though. Get from path file. 
 path_comparisons = []
 for path in path_names:
@@ -605,12 +604,15 @@ rule aggregate_ezAAI_BLAST:
     benchmark: os.path.join(logs_dir, "EzAAI/aggregate", f"{basename}.aggregate.BLAST.defaultthresh.benchmark")
     run:
         # aggreate all tsvs --> single csv.gz
+        def acc2path(anchor_acc):
+            return anchor_paths.at[anchor_acc, "path"]
+        
         aggDF = pd.concat([pd.read_csv(str(tsv), sep="\t") for tsv in input])
-        rename_cols = {"Label 1": "anchor_name",
-                       "Label 2": "compare_name",
+        rename_cols = {"Label 2": "anchor_name",
+                       "Label 1": "compare_name",
                        "AAI": "EzAAIb AAI",
-                       "CDS count 1": "EzAAIb anchor CDS count",
-                       "CDS count 2": "EzAAIb compare CDS count",
+                       "CDS count 2": "EzAAIb anchor CDS count",
+                       "CDS count 1": "EzAAIb compare CDS count",
                        "Matched count": "EzAAIb matched CDS count",
                        "Proteome cov.": "EzAAIb proteome coverage",
                        "ID param.": "EzAAIb id threshold",
@@ -619,8 +621,6 @@ rule aggregate_ezAAI_BLAST:
         aggDF.rename(columns=rename_cols, inplace=True)
         aggDF.drop(columns=drop_cols, inplace=True)
         aggDF["comparison_name"] = aggDF["anchor_name"] + "_x_" + aggDF["compare_name"]
-        def acc2path(anchor_acc):
-            return anchor_paths.at[anchor_acc, "path"]
         aggDF["path"] = aggDF["anchor_name"].apply(acc2path)
         aggDF.to_csv(str(output), index=False)
 
