@@ -28,8 +28,12 @@ rule all:
         #expand(out_dir + 'reports/report-{sample}.html', sample=SAMPLES)
         # read mapping outputs
         expand(out_dir + '/merge_reads/{sample}.merged.fq.gz', sample=SAMPLES),
-        expand(out_dir + "/proteomes/{ident}_protein.faa.bwt",ident=proteomes_to_map),
-        expand(out_dir + "/protein_mapping/{sample}.x.{ident}.mapped.fq.gz", sample=SAMPLES, ident=proteomes_to_map)
+        expand(out_dir + "/proteomes/{ident}_protein.faa.gz.bwt",ident=proteomes_to_map),
+        expand(out_dir + "/protein_mapping/{sample}.x.{ident}.mapped.fq.gz", sample=SAMPLES, ident=proteomes_to_map),
+        expand(out_dir + "/protein_mapping/{sample}.x.{ident}.regions.bed", sample=SAMPLES, ident=proteomes_to_map),
+        expand(out_dir + "/protein_mapping/{sample}.x.{ident}.depth.txt", sample=SAMPLES, ident=proteomes_to_map),
+        expand(out_dir + "/protein_mapping/{sample}.x.{ident}.vcf.gz", sample=SAMPLES, ident=proteomes_to_map),
+        expand(out_dir + "/protein_mapping/{sample}.summary.csv", sample=SAMPLES),
 
 rule run_genome_grist_til_gather:
     input: "conf/protein-grist.yml",
@@ -67,7 +71,7 @@ rule bbmerge_paired_reads:
         mem = ABUNDTRIM_MEMORY,
     shell: 
         """
-        bbmerge.sh -t {threads} -Xmx {params.mem} in={input} \
+        bbmerge.sh -Xmx25G in={input} \
             out={output.merged} outu={output.unmerged} \
             ihist={output.insert_size_hist}
         """
@@ -83,21 +87,27 @@ rule paladin_index_wc:
         #Checkpoint_ProteomeFiles(f"{out_dir}/proteomes/{{ident}}_protein.faa.gz"),
         proteome = lambda w: "/home/ntpierce/2021-rank-compare/" + proteome_inf.at[f"{w.ident}", "protein_filename"]
     output:
-        idx = out_dir + "/proteomes/{ident}_protein.faa.bwt",
+        idx = out_dir + "/proteomes/{ident}_protein.faa.gz.bwt",
+    params:
+        prot_dir = out_dir + '/proteomes',
+        proteome = lambda w: f"{out_dir}/proteomes/{w.ident}_protein.faa.gz",
     conda: 'conf/env/paladin.yml'
     shell:
         """
-        paladin index -r3 {input.proteome}
+        mkdir -p {params.prot_dir}
+        cp {input.proteome} {params.prot_dir}
+        paladin index -r3 {params.proteome}
         """
+        #paladin index -r3 {input.proteome}
 
 rule paladin_align_wc:
     input:
         merged_reads= out_dir + '/merge_reads/{sample}.merged.fq.gz',
-        index= out_dir + "/proteomes/{ident}_protein.faa.bwt",
+        index= out_dir + "/proteomes/{ident}_protein.faa.gz.bwt",
     output:
         bam = out_dir + "/protein_mapping/{sample}.x.{ident}.bam",
     params:
-        index_base=lambda w: f"{out_dir}/proteomes/{w.ident}_protein.faa"
+        index_base=lambda w: f"{out_dir}/proteomes/{w.ident}_protein.faa.gz"
     log:
         out_dir + "logs/{sample}.x.{ident}.paladin-align.log"
     benchmark:
@@ -109,16 +119,89 @@ rule paladin_align_wc:
         paladin align -t {threads} -T 20 {params.index_base} {input.merged_reads} | samtools view -Sb - > {output}
         """
 
+# sort bam 
+rule sort_bam:
+    input:
+        bam = out_dir + "/{dir}/{bam}.bam",
+    output:
+        sort = out_dir + "/{dir}/sorted/{bam}.sorted.bam",
+    conda: "conf/env/minimap2.yml"
+    shell: 
+        """
+        samtools sort {input.bam} -o {output.sort} -O bam
+        """
+
 # extract FASTQ from BAM
 rule bam_to_fastq_wc:
     input:
-        bam = out_dir + "/protein_mapping/{bam}.bam",
+        sorted_bam = out_dir + "/protein_mapping/sorted/{bam}.sorted.bam",
     output:
         mapped = out_dir + "/protein_mapping/{bam}.mapped.fq.gz",
     conda: "conf/env/minimap2.yml"
     shell: 
         """
-        samtools bam2fq {input.bam} | gzip > {output.mapped}
+        samtools bam2fq {input.sorted_bam} | gzip > {output.mapped}
+        """
+
+
+# get per-base depth information from BAM
+rule bam_to_depth_wc:
+    input:
+        sorted_bam = out_dir + "/{dir}/sorted/{bam}.sorted.bam",
+    output:
+        depth = out_dir + "/{dir}/{bam}.depth.txt",
+    conda: "conf/env/minimap2.yml"
+    shell: 
+        """
+        samtools depth -aa {input.sorted_bam} > {output.depth}
+        """
+
+# wild card rule for getting _covered_ regions from BAM
+rule bam_covered_regions_wc:
+    input:
+        sorted_bam = out_dir + "/{dir}/sorted/{bam}.sorted.bam",
+    output:
+        regions = out_dir + "/{dir}/{bam}.regions.bed",
+    conda: "conf/env/covtobed.yml"
+    shell: 
+        """
+        covtobed {input.sorted_bam} -l 100 -m 1 | \
+            bedtools merge -d 5 -c 4 -o mean > {output.regions}
+        """
+
+# calculating SNPs/etc.
+rule mpileup_wc:
+    input:
+        query = out_dir + "/proteomes/{ident}_protein.faa.gz",
+        sorted_bam = out_dir + "/{dir}/sorted/{sample}.x.{ident}.sorted.bam",
+    output:
+        bcf = out_dir + "/{dir}/{sample}.x.{ident}.bcf",
+        vcf = out_dir + "/{dir}/{sample}.x.{ident}.vcf.gz",
+        vcfi = out_dir + "/{dir}/{sample}.x.{ident}.vcf.gz.csi",
+    conda: "conf/env/bcftools.yml"
+    shell: 
+        """
+        proteomefile=$(mktemp -t g.proteome.XXXXXXX)
+        gunzip -c {input.query} > $proteomefile
+        bcftools mpileup -Ou -f $proteomefile {input.sorted_bam} | bcftools call -mv -Ob -o {output.bcf}
+        rm $proteomefile
+        bcftools view {output.bcf} | bgzip > {output.vcf}
+        bcftools index {output.vcf}
+        """
+
+# summarize depth into a CSV
+rule summarize_samtools_depth_wc:
+    input:
+        depth = expand(out_dir + "/{{dir}}/{{sample}}.x.{ident}.depth.txt", ident = proteomes_to_map),
+        vcf = expand(out_dir + "/{{dir}}/{{sample}}.x.{ident}.vcf.gz", ident = proteomes_to_map)
+        #depth = Checkpoint_GatherResults(outdir + f"/{{dir}}/{{sample}}.x.{{ident}}.depth.txt"),
+        #vcf = Checkpoint_GatherResults(outdir + f"/{{dir}}/{{sample}}.x.{{ident}}.vcf.gz")
+    output:
+        csv = f"{out_dir}/{{dir}}/{{sample}}.summary.csv"
+    shell: 
+        """
+        python summarize_mapping.py {wildcards.sample} \
+             {input.depth} -o {output.csv}
         """
 
 #rule write_grist_config:
