@@ -7,15 +7,29 @@
 # map  reads --> proteomes
 # generate summary stats
 # generate grist-style plots
-
+import pandas as pd
 #configfile: prot-mapping.yml
 configfile: "conf/protein-grist.yml"
 SAMPLES = config["samples"]
 out_dir = config["outdir"]
 logs_dir = os.path.join(out_dir, "logs")
 
+ABUNDTRIM_MEMORY = float(config['metagenome_trim_memory'])
+
+# make dictionary of proteomes
+proteome_inf = pd.read_csv("/home/ntpierce/2021-rank-compare/output.rank-compare/gtdb-rs207.fromfile.csv")
+proteome_inf.set_index('ident', inplace=True)
+# to do-- read /get these from gather results! 
+proteomes_to_map = ['GCF_014131715.1']
+
 rule all:
-    input: expand(out_dir + 'reports/report-{sample}.html', sample=SAMPLES)
+    input: 
+        # grist outputs
+        #expand(out_dir + 'reports/report-{sample}.html', sample=SAMPLES)
+        # read mapping outputs
+        expand(out_dir + '/merge_reads/{sample}.merged.fq.gz', sample=SAMPLES),
+        expand(out_dir + "/proteomes/{ident}_protein.faa.bwt",ident=proteomes_to_map),
+        expand(out_dir + "/protein_mapping/{sample}.x.{ident}.mapped.fq.gz", sample=SAMPLES, ident=proteomes_to_map)
 
 rule run_genome_grist_til_gather:
     input: "conf/protein-grist.yml",
@@ -38,64 +52,74 @@ rule run_genome_grist_til_gather:
 #rule protein_mapping:
 # bbmerge reads for use with prodigal protein mapper
 # does this work with gzipped reads?
-#rule bbmerge_paired_reads_wc:
-#    input:
-#        interleaved = ancient(outdir + '/trim/{sample}.trim.fq.gz'),
-#    output:
-#        merged = protected(outdir + '/merge_reads/{sample}.merged.fq.gz'),
-#        unmerged = protected(outdir + '/merge_reads/{sample}.unmerged.fq.gz'),
-#        insert_size_hist = protected(outdir + '/merge_reads/{sample}.insert-size-histogram.txt'),
-#    conda: 'env/bbmap.yml'
-#    threads: 6
-#    resources:
-#        mem_mb = int(ABUNDTRIM_MEMORY / 1e6),
-#    params:
-#        mem = ABUNDTRIM_MEMORY,
-#    shell: """
-#            bbmerge.sh -t {threads} -Xmx {params.mem} in={input} \
-#            out={output.merged} outu={output.unmerged} \
-#            ihist={output.ihist}
-#    """
-#
-#rule paladin_index_wc:
-#    input:
-#        proteome = Checkpoint_ProteomeFiles(f"{outdir}/proteomes/{{ident}}_protein.faa.gz"),
-#    output:
-#        idx = outdir + "/proteomes/{ident}_protein.faa.bwt",
-#    conda: 'env/paladin.yml'
-#    shell:
-#        """
-#        paladin index -r3 {input.proteome}
-#        """
+rule bbmerge_paired_reads:
+    input:
+        interleaved = ancient(out_dir + '/trim/{sample}.trim.fq.gz'),
+    output:
+        merged = protected(out_dir + '/merge_reads/{sample}.merged.fq.gz'),
+        unmerged = protected(out_dir + '/merge_reads/{sample}.unmerged.fq.gz'),
+        insert_size_hist = protected(out_dir + '/merge_reads/{sample}.insert-size-histogram.txt'),
+    conda: 'conf/env/bbmap.yml'
+    threads: 6
+    resources:
+        mem_mb = int(ABUNDTRIM_MEMORY / 1e6),
+    params:
+        mem = ABUNDTRIM_MEMORY,
+    shell: 
+        """
+        bbmerge.sh -t {threads} -Xmx {params.mem} in={input} \
+            out={output.merged} outu={output.unmerged} \
+            ihist={output.insert_size_hist}
+        """
 
-#rule paladin_align_wc:
-#    input:
-##        reads='{sample}.assembled.fastq',
-#        merged_reads= outdir + '/merge_reads/{sample}.merged.fq.gz',
-#        index= outdir + "/proteomes/{ident}_protein.faa.bwt",
-#    output:
-#        bam = outdir + "/protein_mapping/{sample}.x.{ident}.bam",
-#    params:
-#        index_base=lambda w: f"{outdir}/proteomes/{w.ident}_protein.faa"
-##    log:
-##        "logs/{sample}.paladin-align.log"
-##    threads: 4
-#    conda: "paladin.yml"
-#    shell:
-#        """
-#        paladin align -t {threads} -T 20 {params.index_base} {input.reads} | samtools view -Sb - > {output}
-#        """
+## TO DO: 
+#1. use GTDB proteomes available in 2021-rank-compare/genbank/proteomes and/or 2021-rank-compare/prodigal/
+#2. checkpoint rule to read in gather results and load all idents for mapping. Does this need to be in order??
+#3. test index and alignment w/paladin
+
+
+rule paladin_index_wc:
+    input:
+        #Checkpoint_ProteomeFiles(f"{out_dir}/proteomes/{{ident}}_protein.faa.gz"),
+        proteome = lambda w: "/home/ntpierce/2021-rank-compare/" + proteome_inf.at[f"{w.ident}", "protein_filename"]
+    output:
+        idx = out_dir + "/proteomes/{ident}_protein.faa.bwt",
+    conda: 'conf/env/paladin.yml'
+    shell:
+        """
+        paladin index -r3 {input.proteome}
+        """
+
+rule paladin_align_wc:
+    input:
+        merged_reads= out_dir + '/merge_reads/{sample}.merged.fq.gz',
+        index= out_dir + "/proteomes/{ident}_protein.faa.bwt",
+    output:
+        bam = out_dir + "/protein_mapping/{sample}.x.{ident}.bam",
+    params:
+        index_base=lambda w: f"{out_dir}/proteomes/{w.ident}_protein.faa"
+    log:
+        out_dir + "logs/{sample}.x.{ident}.paladin-align.log"
+    benchmark:
+        out_dir + "logs/{sample}.x.{ident}.paladin-align.benchmark"
+    threads: 4
+    conda: "conf/env/paladin.yml"
+    shell:
+        """
+        paladin align -t {threads} -T 20 {params.index_base} {input.merged_reads} | samtools view -Sb - > {output}
+        """
 
 # extract FASTQ from BAM
-#rule bam_to_fastq_wc:
-#    input:
-#        bam = outdir + "/protein_mapping/{bam}.bam",
-#    output:
-#        mapped = outdir + "/protein_mapping/{bam}.mapped.fq.gz",
-#    conda: "env/minimap2.yml"
-#    shell: """
-#        samtools bam2fq {input.bam} | gzip > {output.mapped}
-#    """
+rule bam_to_fastq_wc:
+    input:
+        bam = out_dir + "/protein_mapping/{bam}.bam",
+    output:
+        mapped = out_dir + "/protein_mapping/{bam}.mapped.fq.gz",
+    conda: "conf/env/minimap2.yml"
+    shell: 
+        """
+        samtools bam2fq {input.bam} | gzip > {output.mapped}
+        """
 
 #rule write_grist_config:
 #    input:
@@ -108,7 +132,7 @@ rule run_genome_grist_til_gather:
 #        search_ksize=config["search_ksize"]
 #    run:
 #        with open(str(output), 'w') as out:
-#            out.write(f"outdir: {out_dir}\n")
+#            out.write(f"out_dir: {out_dir}\n")
 #            out.write(f"metagenome_trim_memory: {params.metagenome_trim_memory}\n")
 #            out.write(f"sourmash_database_glob_pattern: {input.database}\n") # can this have filepath, or does it need to be the basename only?
 #            out.write(f"sample:\n")
