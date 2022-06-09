@@ -16,7 +16,11 @@ data_dir  = config['datadir']
 logs_dir = os.path.join(out_dir, "logs")
 
 ABUNDTRIM_MEMORY = float(config['metagenome_trim_memory'])
-SOURMASH_DB_KSIZE = 10
+
+SOURMASH_DB_KSIZE = config.get('sourmash_database_ksize', ['10'])
+SOURMASH_COMPUTE_SCALED = config.get('sourmash_scaled', '200')
+SOURMASH_COMPUTE_TYPE = config.get('sourmash_sigtype', 'protein')
+SOURMASH_COMPUTE_KSIZES = config.get('sourmash_compute_ksizes', ['7',' 10'])
 
 rule all:
     input: 
@@ -24,6 +28,7 @@ rule all:
         expand(os.path.join(out_dir, "abundtrim", "{sample}.abundtrim.fq.gz"), sample=SAMPLES),
         expand(os.path.join(out_dir, "abundtrim", "{sample}.abundtrim.fq.gz.kmer-report.txt"), sample=SAMPLES),
         expand(os.path.join(out_dir, "abundtrim", "{sample}.abundtrim.fq.gz.reads-report.txt"), sample=SAMPLES),
+        expand(os.path.join(out_dir, "sigs", "{sample}.abundtrim.sig.zip"), sample=SAMPLES)
 
 
 
@@ -117,5 +122,26 @@ rule count_trimmed_reads_wc:
                       }}' > {output.report}
         """
 
+# make a `sourmash sketch` -p param string.
+def make_param_str(ksizes, scaled):
+    ks = [ f'k={k}' for k in ksizes ]
+    ks = ",".join(ks)
+    return f"{ks},scaled={scaled},abund"
 
-
+# compute sourmash signature from abundtrim reads
+rule smash_abundtrim_wc:
+    input:
+        metagenome = ancient(out_dir + "/abundtrim/{sample}.abundtrim.fq.gz"),
+    output:
+        sig = out_dir + "/sigs/{sample}.abundtrim.sig.zip"
+    conda: "conf/env/sourmash.yml"
+    params:
+        param_str = make_param_str(ksizes=SOURMASH_COMPUTE_KSIZES,
+                                   scaled=SOURMASH_COMPUTE_SCALED),
+        action = "translate" if SOURMASH_COMPUTE_TYPE == "protein" else "dna"
+    shell: 
+        """
+        sourmash sketch {params.action} -p {params.param_str} \
+           {input} -o {output} \
+           --name {wildcards.sample}
+        """
