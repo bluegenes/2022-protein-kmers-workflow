@@ -7,7 +7,9 @@
 # map  reads --> proteomes
 # generate summary stats
 # generate grist-style plots
+import csv
 import pandas as pd
+import glob
 #configfile: prot-mapping.yml
 configfile: "conf/protein-grist.yml"
 SAMPLES = config["samples"]
@@ -19,22 +21,84 @@ ABUNDTRIM_MEMORY = float(config['metagenome_trim_memory'])
 # make dictionary of proteomes
 proteome_inf = pd.read_csv("/home/ntpierce/2021-rank-compare/output.rank-compare/gtdb-rs207.fromfile.csv")
 proteome_inf.set_index('ident', inplace=True)
-# to do-- read /get these from gather results! 
-proteomes_to_map = ['GCF_014131715.1']
+
 
 rule all:
     input: 
         # grist outputs
         #expand(out_dir + 'reports/report-{sample}.html', sample=SAMPLES)
         # read mapping outputs
-        expand(out_dir + '/merge_reads/{sample}.merged.fq.gz', sample=SAMPLES),
-        expand(out_dir + "/proteomes/{ident}_protein.faa.gz.bwt",ident=proteomes_to_map),
-        expand(out_dir + "/protein_mapping/{sample}.x.{ident}.mapped.fq.gz", sample=SAMPLES, ident=proteomes_to_map),
-        expand(out_dir + "/protein_mapping/{sample}.x.{ident}.regions.bed", sample=SAMPLES, ident=proteomes_to_map),
-        expand(out_dir + "/protein_mapping/{sample}.x.{ident}.depth.txt", sample=SAMPLES, ident=proteomes_to_map),
-        expand(out_dir + "/protein_mapping/{sample}.x.{ident}.vcf.gz", sample=SAMPLES, ident=proteomes_to_map),
+        #expand(out_dir + '/merge_reads/{sample}.merged.fq.gz', sample=SAMPLES),
         expand(out_dir + "/protein_mapping/{sample}.summary.csv", sample=SAMPLES),
 
+# use existed rs202 gather results for now
+checkpoint gather_reads_wc:
+    input:
+        gather_csv = f'output.protein-grist-rs202/gather/{{sample}}.gather.csv'
+        #gather_csv = f'{out_dir}/gather/{{sample}}.gather.csv'
+    output:
+        touch(f"output.protein-grist-rs202/gather/.gather.{{sample}}")   # checkpoints need an output ;)
+        #touch(f"{out_dir}/gather/.gather.{{sample}}")   # checkpoints need an output ;)
+
+class Checkpoint_GatherResults:
+    """Given a pattern containing {ident} and {sample}, this class
+    will generate the list of {ident} for that {sample}'s gather results.
+    Alternatively, you can omit {sample} from the pattern and include the
+    list of sample names in the second argument to the constructor.
+    """
+    def __init__(self, pattern, samples=None):
+        self.pattern = pattern
+        self.samples = samples
+
+    def get_genome_idents(self, sample):
+        # NTP: use rs202 gather results for now
+        #gather_csv = f'{out_dir}/gather/{sample}.gather.csv'
+        gather_csv = f'output.protein-grist-rs202/gather/{sample}.gather.csv'
+        assert os.path.exists(gather_csv), "gather output does not exist!?"
+
+        genome_idents = []
+        with open(gather_csv, 'rt') as fp:
+           r = csv.DictReader(fp)
+           for row in r:
+               ident = row['name'].split()[0]
+               genome_idents.append(ident)
+        print(f'loaded {len(genome_idents)} identifiers from {gather_csv}.',
+              file=sys.stderr)
+
+        return genome_idents
+
+    def __call__(self, w):
+        # get 'sample' from wildcards?
+        if self.samples is None:
+            return self.do_sample(w)
+        else:
+            assert not hasattr(w, 'sample'), "if 'samples' provided to constructor, cannot also be in rule inputs"
+
+            ret = []
+            for sample in self.samples:
+                d = dict(sample=sample)
+                w = snakemake.io.Wildcards(fromdict=d)
+
+                x = self.do_sample(w)
+                ret.extend(x)
+
+            return ret
+
+    def do_sample(self, w):
+        # wait for the results of 'gather_reads_wc'; this will trigger
+        # exception until that rule has been run.
+        checkpoints.gather_reads_wc.get(**w)
+
+        # parse hitlist_genomes,
+        genome_idents = self.get_genome_idents(w.sample)
+
+        p = expand(self.pattern, ident=genome_idents, **w)
+
+        return p
+
+
+
+# NTP use this later to re-run gather with rs207
 rule run_genome_grist_til_gather:
     input: "conf/protein-grist.yml",
         #config=config["grist-config"] #os.path.join(out_dir, f"config.grist.{basename}.yml"),
@@ -43,8 +107,10 @@ rule run_genome_grist_til_gather:
     benchmark: os.path.join(logs_dir, "genome-grist.benchmark")
     threads: 32
     resources:
-        mem_mb=150000,
         #mem_mb=lambda wildcards, attempt: attempt*145000
+        mem_mb=150000,
+        time=400, #240,
+        partition="med2",
     conda: "conf/env/grist.yml"
     shell:
         """
@@ -53,9 +119,7 @@ rule run_genome_grist_til_gather:
                           --profile slurm -n 2> {log}
         """
 
-#rule protein_mapping:
 # bbmerge reads for use with prodigal protein mapper
-# does this work with gzipped reads?
 rule bbmerge_paired_reads:
     input:
         interleaved = ancient(out_dir + '/trim/{sample}.trim.fq.gz'),
@@ -67,38 +131,64 @@ rule bbmerge_paired_reads:
     threads: 6
     resources:
         mem_mb = int(ABUNDTRIM_MEMORY / 1e6),
+        time=400, #240,
+        partition="med2",
     params:
         mem = ABUNDTRIM_MEMORY,
+    wildcard_constraints:
+        sample="/w+"
+    log: os.path.join(logs_dir, "bbmerge", "{sample}.log")
+    benchmark: os.path.join(logs_dir, "bbmerge", "{sample}.benchmark")
     shell: 
         """
         bbmerge.sh -Xmx25G in={input} \
             out={output.merged} outu={output.unmerged} \
-            ihist={output.insert_size_hist}
+            ihist={output.insert_size_hist} 2> {log}
         """
 
 ## TO DO: 
-#1. use GTDB proteomes available in 2021-rank-compare/genbank/proteomes and/or 2021-rank-compare/prodigal/
-#2. checkpoint rule to read in gather results and load all idents for mapping. Does this need to be in order??
-#3. test index and alignment w/paladin
+#1. DONE use GTDB proteomes available in 2021-rank-compare/genbank/proteomes and/or 2021-rank-compare/prodigal/
+#2. DONE checkpoint rule to read in gather results and load all idents for mapping.
+#3. DONE test index and alignment w/paladin
+#4. integrate protein mapping and smash gather results (notebook)
+
+
+def find_proteome(w):
+    dl_protdir = "/home/ntpierce/2021-rank-compare/genbank/proteomes"
+    prodigal_protdir = "/home/ntpierce/2021-rank-compare/genbank/prodigal"
+    filename = f"{w.ident}_protein.faa.gz"
+    for pd in [prodigal_protdir, dl_protdir]: # must check prodigal dir first for this to work properly
+        fn = glob.glob(os.path.join(pd, filename))
+        if len(fn) == 1:
+            break
+    return fn[0]
+   
 
 
 rule paladin_index_wc:
     input:
         #Checkpoint_ProteomeFiles(f"{out_dir}/proteomes/{{ident}}_protein.faa.gz"),
-        proteome = lambda w: "/home/ntpierce/2021-rank-compare/" + proteome_inf.at[f"{w.ident}", "protein_filename"]
+        #lambda w: "/home/ntpierce/2021-rank-compare/" + proteome_inf.at[f"{w.ident}", "protein_filename"]
+        find_proteome
     output:
         idx = out_dir + "/proteomes/{ident}_protein.faa.gz.bwt",
+        proteome = out_dir + "/proteomes/{ident}_protein.faa.gz",
     params:
         prot_dir = out_dir + '/proteomes',
         proteome = lambda w: f"{out_dir}/proteomes/{w.ident}_protein.faa.gz",
+    resources:
+        mem_mb = lambda wildcards, attempt: attempt*3000,
+        time=400, #240,
+        partition="med2",
+    log: os.path.join(logs_dir, "paladin_index", "{ident}.log")
+    benchmark: os.path.join(logs_dir, "paladin_index", "{ident}.benchmark")
     conda: 'conf/env/paladin.yml'
     shell:
         """
         mkdir -p {params.prot_dir}
-        cp {input.proteome} {params.prot_dir}
-        paladin index -r3 {params.proteome}
+        cp {input} {output.proteome}
+        paladin index -r3 {output.proteome} 2> {log}
         """
-        #paladin index -r3 {input.proteome}
 
 rule paladin_align_wc:
     input:
@@ -108,15 +198,17 @@ rule paladin_align_wc:
         bam = out_dir + "/protein_mapping/{sample}.x.{ident}.bam",
     params:
         index_base=lambda w: f"{out_dir}/proteomes/{w.ident}_protein.faa.gz"
-    log:
-        out_dir + "logs/{sample}.x.{ident}.paladin-align.log"
-    benchmark:
-        out_dir + "logs/{sample}.x.{ident}.paladin-align.benchmark"
+    resources:
+        mem_mb = lambda wildcards, attempt: attempt*10000,
+        time=240,
+        partition="med2",
+    log: os.path.join(logs_dir, "paladin_align", "{sample}.x.{ident}.paladin-align.log")
+    benchmark: os.path.join(logs_dir, "paladin_align", "{sample}.x.{ident}.paladin-align.benchmark")
     threads: 4
     conda: "conf/env/paladin.yml"
     shell:
         """
-        paladin align -t {threads} -T 20 {params.index_base} {input.merged_reads} | samtools view -Sb - > {output}
+        paladin align -t {threads} -T 20 {params.index_base} {input.merged_reads} | samtools view -Sb - > {output} 2> {log}
         """
 
 # sort bam 
@@ -124,84 +216,118 @@ rule sort_bam:
     input:
         bam = out_dir + "/{dir}/{bam}.bam",
     output:
-        sort = out_dir + "/{dir}/sorted/{bam}.sorted.bam",
+        sort = out_dir + "/{dir}/sorted/{bam}.bam",
+    resources:
+        mem_mb = lambda wildcards, attempt: attempt*3000,
+        time=90,
+        partition="med2",
+    log: os.path.join(logs_dir, "sort_bam", "{dir}/{bam}.log")
+    benchmark: os.path.join(logs_dir, "sort_bam", "{dir}/{bam}.benchmark")
     conda: "conf/env/minimap2.yml"
     shell: 
         """
-        samtools sort {input.bam} -o {output.sort} -O bam
+        samtools sort {input.bam} -o {output.sort} -O bam 2> {log}
         """
 
 # extract FASTQ from BAM
 rule bam_to_fastq_wc:
     input:
-        sorted_bam = out_dir + "/protein_mapping/sorted/{bam}.sorted.bam",
+        sorted_bam = out_dir + "/protein_mapping/sorted/{bam}.bam",
     output:
-        mapped = out_dir + "/protein_mapping/{bam}.mapped.fq.gz",
+        mapped = out_dir + "/protein_mapping/sorted/{bam}.mapped.fq.gz",
+    resources:
+        mem_mb = lambda wildcards, attempt: attempt*3000,
+        time=240,
+        partition="med2",
+    log: os.path.join(logs_dir, "bam_to_fastq", "{bam}.log")
+    benchmark: os.path.join(logs_dir, "bam_to_fastq", "{bam}.benchmark")
     conda: "conf/env/minimap2.yml"
     shell: 
         """
-        samtools bam2fq {input.sorted_bam} | gzip > {output.mapped}
+        samtools bam2fq {input.sorted_bam} | gzip > {output.mapped} 2> {log}
         """
 
 
 # get per-base depth information from BAM
 rule bam_to_depth_wc:
     input:
-        sorted_bam = out_dir + "/{dir}/sorted/{bam}.sorted.bam",
+        sorted_bam = out_dir + "/{dir}/sorted/{bam}.bam",
     output:
         depth = out_dir + "/{dir}/{bam}.depth.txt",
+    resources:
+        mem_mb = lambda wildcards, attempt: attempt*3000,
+        time=240,
+        partition="med2",
+    log: os.path.join(logs_dir, "bam_to_depth", "{dir}/{bam}.log")
+    benchmark: os.path.join(logs_dir, "bam_to_depth", "{dir}/{bam}.benchmark")
     conda: "conf/env/minimap2.yml"
     shell: 
         """
-        samtools depth -aa {input.sorted_bam} > {output.depth}
+        samtools depth -aa {input.sorted_bam} > {output.depth} 2> {log}
         """
 
 # wild card rule for getting _covered_ regions from BAM
 rule bam_covered_regions_wc:
     input:
-        sorted_bam = out_dir + "/{dir}/sorted/{bam}.sorted.bam",
+        sorted_bam = out_dir + "/{dir}/sorted/{bam}.bam",
     output:
         regions = out_dir + "/{dir}/{bam}.regions.bed",
+    resources:
+        mem_mb = lambda wildcards, attempt: attempt*3000,
+        time=240,
+        partition="med2",
+    log: os.path.join(logs_dir, "bam_covered_regions", "{dir}/{bam}.log")
+    benchmark: os.path.join(logs_dir, "bam_covered_regions", "{dir}/{bam}.benchmark")
     conda: "conf/env/covtobed.yml"
     shell: 
         """
         covtobed {input.sorted_bam} -l 100 -m 1 | \
-            bedtools merge -d 5 -c 4 -o mean > {output.regions}
+            bedtools merge -d 5 -c 4 -o mean > {output.regions} 2> {log}
         """
 
 # calculating SNPs/etc.
 rule mpileup_wc:
     input:
         query = out_dir + "/proteomes/{ident}_protein.faa.gz",
-        sorted_bam = out_dir + "/{dir}/sorted/{sample}.x.{ident}.sorted.bam",
+        sorted_bam = out_dir + "/{dir}/sorted/{sample}.x.{ident}.bam",
     output:
         bcf = out_dir + "/{dir}/{sample}.x.{ident}.bcf",
         vcf = out_dir + "/{dir}/{sample}.x.{ident}.vcf.gz",
         vcfi = out_dir + "/{dir}/{sample}.x.{ident}.vcf.gz.csi",
     conda: "conf/env/bcftools.yml"
+    resources:
+        mem_mb = lambda wildcards, attempt: attempt*3000,
+        time=240,
+        partition="med2",
+    log: os.path.join(logs_dir, "mpileup", "{dir}/{sample}.x.{ident}.log")
+    benchmark: os.path.join(logs_dir, "mpileup", "{dir}/{sample}.x.{ident}.benchmark")
     shell: 
         """
         proteomefile=$(mktemp -t g.proteome.XXXXXXX)
         gunzip -c {input.query} > $proteomefile
-        bcftools mpileup -Ou -f $proteomefile {input.sorted_bam} | bcftools call -mv -Ob -o {output.bcf}
+        bcftools mpileup -Ou -f $proteomefile {input.sorted_bam} | bcftools call -mv -Ob -o {output.bcf} 2> {log}
         rm $proteomefile
-        bcftools view {output.bcf} | bgzip > {output.vcf}
-        bcftools index {output.vcf}
+        bcftools view {output.bcf} | bgzip > {output.vcf} 2>> {log}
+        bcftools index {output.vcf} 2>> {log}
         """
 
 # summarize depth into a CSV
 rule summarize_samtools_depth_wc:
     input:
-        depth = expand(out_dir + "/{{dir}}/{{sample}}.x.{ident}.depth.txt", ident = proteomes_to_map),
-        vcf = expand(out_dir + "/{{dir}}/{{sample}}.x.{ident}.vcf.gz", ident = proteomes_to_map)
-        #depth = Checkpoint_GatherResults(outdir + f"/{{dir}}/{{sample}}.x.{{ident}}.depth.txt"),
-        #vcf = Checkpoint_GatherResults(outdir + f"/{{dir}}/{{sample}}.x.{{ident}}.vcf.gz")
+        depth = Checkpoint_GatherResults(out_dir + f"/{{dir}}/{{sample}}.x.{{ident}}.depth.txt"),
+        vcf = Checkpoint_GatherResults(out_dir + f"/{{dir}}/{{sample}}.x.{{ident}}.vcf.gz"),
     output:
         csv = f"{out_dir}/{{dir}}/{{sample}}.summary.csv"
+    resources:
+        mem_mb = lambda wildcards, attempt: attempt*3000,
+        time=240,
+        partition="med2",
+    log: os.path.join(logs_dir, "summarize_samtools_depth", "{dir}/{sample}.log")
+    benchmark: os.path.join(logs_dir, "summarize_samtools_depth", "{dir}/{sample}.benchmark")
     shell: 
         """
         python summarize_mapping.py {wildcards.sample} \
-             {input.depth} -o {output.csv}
+             {input.depth} -o {output.csv} 2> {log}
         """
 
 #rule write_grist_config:
