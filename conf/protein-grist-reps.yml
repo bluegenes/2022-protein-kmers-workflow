@@ -6,9 +6,7 @@ samples:
 - SRR12324253 # zymo mock
 
 sourmash_sigtype: protein
-#sourmash_scaled: 200
-sourmash_scaled: 1000
-prefetch_scaled: 10000
+sourmash_scaled: 200
 sourmash_compute_ksizes:
 - 7
 - 8
@@ -17,16 +15,16 @@ sourmash_compute_ksizes:
 - 11
 
 
-outdir: output.protein-grist2
+outdir: output.protein-grist-gtdbreps/
 metagenome_trim_memory: 20e9
 prefetch_memory: 65e9
 
 sourmash_database_ksize: 10
-#sourmash_database_threshold_bp: 3000
+sourmash_database_threshold_bp: 3000
 sourmash_databases:
-- /group/ctbrowngrp/sourmash-db/gtdb-rs207/gtdb-rs207.protein.k10.sbt.zip
+- /group/ctbrowngrp/sourmash-db/gtdb-rs207/gtdb-rs207.protein-reps.k10.sqldb
 
 taxonomies:
 - /group/ctbrowngrp/sourmash-db/gtdb-rs207/gtdb-rs207.taxonomy.with-strain.csv.gz
 
-#gather_memory: 3000
+gather_memory: 3000

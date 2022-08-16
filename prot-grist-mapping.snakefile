@@ -11,8 +11,9 @@ import csv
 import pandas as pd
 import glob
 #configfile: prot-mapping.yml
-configfile: "conf/protein-grist.yml"
+configfile: "conf/protein-grist-reps.yml"
 SAMPLES = config["samples"]
+
 out_dir = config["outdir"]
 logs_dir = os.path.join(out_dir, "logs")
 
@@ -26,19 +27,20 @@ proteome_inf.set_index('ident', inplace=True)
 rule all:
     input: 
         # grist outputs
-        #expand(out_dir + 'reports/report-{sample}.html', sample=SAMPLES)
+        ancient(expand(out_dir + '/reports/report-{sample}.html', sample=SAMPLES)),
         # read mapping outputs
         #expand(out_dir + '/merge_reads/{sample}.merged.fq.gz', sample=SAMPLES),
-        expand(out_dir + "/protein_mapping/{sample}.summary.csv", sample=SAMPLES),
+        ancient(expand(out_dir + "/protein_mapping/{sample}.summary.csv", sample=SAMPLES)),
+        expand(f"{out_dir}/protein_leftover/{{sample}}.summary.csv", sample=SAMPLES),
 
 # use existed rs202 gather results for now
-checkpoint gather_reads_wc:
-    input:
-        gather_csv = f'output.protein-grist-rs202/gather/{{sample}}.gather.csv'
-        #gather_csv = f'{out_dir}/gather/{{sample}}.gather.csv'
-    output:
-        touch(f"output.protein-grist-rs202/gather/.gather.{{sample}}")   # checkpoints need an output ;)
-        #touch(f"{out_dir}/gather/.gather.{{sample}}")   # checkpoints need an output ;)
+#checkpoint gather_reads_wc:
+#    input:
+#        gather_csv = f'output.protein-grist-rs202/gather/{{sample}}.gather.csv'
+#        #gather_csv = f'{out_dir}/gather/{{sample}}.gather.csv'
+#    output:
+#        touch(f"output.protein-grist-rs202/gather/.gather.{{sample}}")   # checkpoints need an output ;)
+#       #touch(f"{out_dir}/gather/.gather.{{sample}}")   # checkpoints need an output ;)
 
 class Checkpoint_GatherResults:
     """Given a pattern containing {ident} and {sample}, this class
@@ -52,8 +54,8 @@ class Checkpoint_GatherResults:
 
     def get_genome_idents(self, sample):
         # NTP: use rs202 gather results for now
-        #gather_csv = f'{out_dir}/gather/{sample}.gather.csv'
-        gather_csv = f'output.protein-grist-rs202/gather/{sample}.gather.csv'
+        gather_csv = f'{out_dir}/gather/{sample}.gather.csv'
+        #gather_csv = f'output.protein-grist-rs202/gather/{sample}.gather.csv'
         assert os.path.exists(gather_csv), "gather output does not exist!?"
 
         genome_idents = []
@@ -87,7 +89,10 @@ class Checkpoint_GatherResults:
     def do_sample(self, w):
         # wait for the results of 'gather_reads_wc'; this will trigger
         # exception until that rule has been run.
-        checkpoints.gather_reads_wc.get(**w)
+        #checkpoints.gather_reads_wc.get(**w)
+        
+        # wait for the results of 'run_genome_grist_til_gather'; this will trigger
+        checkpoints.run_genome_grist_til_gather.get()
 
         # parse hitlist_genomes,
         genome_idents = self.get_genome_idents(w.sample)
@@ -99,10 +104,14 @@ class Checkpoint_GatherResults:
 
 
 # NTP use this later to re-run gather with rs207
-rule run_genome_grist_til_gather:
+#rule run_genome_grist_til_gather:
+checkpoint run_genome_grist_til_gather:
     input: "conf/protein-grist.yml",
         #config=config["grist-config"] #os.path.join(out_dir, f"config.grist.{basename}.yml"),
-    output: expand(os.path.join(out_dir, "reports/report-{sample}.html"), sample=SAMPLES)
+    output: 
+        expand(os.path.join(out_dir, "reports/report-{sample}.html"), sample=SAMPLES),
+        expand(f'{out_dir}/gather/{{sample}}.gather.csv', sample=SAMPLES),
+        #touc:h(f"output.protein-grist/gather/.gather.{{sample}}")   # checkpoints need an output ;)
     log: os.path.join(logs_dir, "genome-grist.log")
     benchmark: os.path.join(logs_dir, "genome-grist.benchmark")
     threads: 32
@@ -116,7 +125,7 @@ rule run_genome_grist_til_gather:
         """
         genome-grist run {input} --resources mem_mb={resources.mem_mb} \
                           -j {threads} summarize_gather --nolock \
-                          --profile slurm -n 2> {log}
+                          2> {log}
         """
 
 # bbmerge reads for use with prodigal protein mapper
@@ -199,12 +208,12 @@ rule paladin_align_wc:
     params:
         index_base=lambda w: f"{out_dir}/proteomes/{w.ident}_protein.faa.gz"
     resources:
-        mem_mb = lambda wildcards, attempt: attempt*10000,
-        time=240,
+        mem_mb = lambda wildcards, attempt: attempt*15000,
+        time=6000,
         partition="med2",
     log: os.path.join(logs_dir, "paladin_align", "{sample}.x.{ident}.paladin-align.log")
     benchmark: os.path.join(logs_dir, "paladin_align", "{sample}.x.{ident}.paladin-align.benchmark")
-    threads: 4
+    threads: 20
     conda: "conf/env/paladin.yml"
     shell:
         """
@@ -329,6 +338,49 @@ rule summarize_samtools_depth_wc:
         python summarize_mapping.py {wildcards.sample} \
              {input.depth} -o {output.csv} 2> {log}
         """
+
+# convert mapped reads to protein_leftover reads
+rule extract_protein_leftover_reads_wc:
+# THIS WRITES {outdir}/mapping/{sample}.x.{ident}.protein_leftover.fq.gz
+    input:
+        csv = ancient(f'{out_dir}/gather/{{sample}}.gather.csv'),
+        mapped = Checkpoint_GatherResults(f"{out_dir}/protein-mapping/sorted/{{sample}}.x.{{ident}}.mapped.fq.gz"),
+    output:
+        touch(f"{out_dir}/protein_leftover/.protein_leftover.{{sample}}")
+    #conda: "conf/env/sourmash.yml" # i think i have sourmash in main env
+    params:
+        outdir = out_dir,
+    shell:
+        """
+        python -Werror -m genome_grist.subtract_gather \
+            {wildcards.sample:q} {input.csv} --outdir={params.out_dir:q}
+        """
+
+# rule for mapping protein_leftover reads to genomes -> BAM
+rule map_protein_leftover_reads_wc:
+    input:
+        all_csv = f"{out_dir}/mapping/{{sample}}.summary.csv",
+        #query = Checkpoint_GenomeFiles(f"{out_dir}/genomes/{{ident}}_genomic.fna.gz"),
+        protein_leftover_reads_flag = f"{out_dir}/protein_leftover/.protein_leftover.{{sample}}",
+        index= out_dir + "/proteomes/{ident}_protein.faa.gz.bwt",
+    output:
+        bam=out_dir + "/protein_leftover/{sample}.x.{ident}.bam",
+    params:
+        index_base=lambda w: f"{out_dir}/proteomes/{w.ident}_protein.faa.gz"
+    conda: "conf/env/paladin.yml"
+    threads: 4
+    shell: 
+       """
+       paladin align -t {threads} -T 20 {params.index_base} \
+         {out_dir}/protein_mapping/{wildcards.sample}.x.{wildcards.ident}.protein_leftover.fq.gz \
+         | samtools view -b -F 4 - | samtools sort - > {output.bam} 2> {log}
+       """
+ #   shell:
+        #minimap2 -ax sr -t {threads} {input.query} \
+     #{outdir}/mapping/{wildcards.sample}.x.{wildcards.ident}.protein_leftover.fq.gz | \
+     #       samtools view -b -F 4 - | samtools sort - > {output.bam}
+ #       """
+ #       """
 
 #rule write_grist_config:
 #    input:
