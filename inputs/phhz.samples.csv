@@ -1,0 +1,5 @@
+name,read1,read2
+SRR12324253,inputs/SRR12324253_1.fastq.gz,inputs/SRR12324253_2.fastq.gz
+SRR1976948,inputs/SRR1976948_1.fastq.gz,inputs/SRR1976948_2.fastq.gz
+SRR5650070,inputs/SRR5650070_1.fastq.gz,inputs/SRR5650070_2.fastq.gz
+SRR606249,inputs/SRR606249_1.fastq.gz,inputs/SRR606249_2.fastq.gz
