@@ -1,0 +1,9 @@
+name: trim
+channels:
+ - conda-forge
+ - bioconda
+ - defaults
+dependencies:
+ - khmer=3.0.0a
+ - fastp=0.20.1
+ - seqtk=1.3

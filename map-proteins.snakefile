@@ -16,36 +16,22 @@ out_dir = config.get('output_dir', 'output.pgather-vs-pmapping')
 logs_dir = os.path.join(out_dir, "logs")
 benchmarks_dir = os.path.join(out_dir, "benchmarks")
 
-basename = config.get("basename", 'hm-set')
+basename = config.get("basename", 'phhz')
 
 sample_info = pd.read_csv(config['sample_info'])
 SAMPLES = sample_info["name"].to_list()
 # hacky, but useful: drop trimmed read names into sample_info dict for easier finding
-sample_info['trim'] = f'{out_dir}/trim/' + sample_info['name'] + '.trim.fq.gz'
-sample_info['abundtrim'] = f'{out_dir}/abundtrim/' + sample_info['name'] + '.abundtrim.fq.gz'
+#sample_info['trim'] = f'{out_dir}/trim/' + sample_info['name'] + '.trim.fq.gz'
+#sample_info['abundtrim'] = f'{out_dir}/abundtrim/' + sample_info['name'] + '.abundtrim.fq.gz'
 # set name as index for easy access
 sample_info.set_index('name', inplace=True)
 
-search_databases = config['search_databases'] # must be dictionary
-ABUNDTRIM_MEMORY = float(config['metagenome_trim_memory'])
-
-
-# check params are in the right format, build alpha-ksize combos and param strings
-alphabet_info = config['alphabet_info']
-alpha_ksize_scaled=[]
-all_param_str=[]
-for alpha, info in alphabet_info.items():
-    scaled = info["scaled"]
-    ksize = info["ksize"]
-    if not isinstance(scaled, list):
-        scaled = [scaled]
-        config["alphabet_info"][alpha]["scaled"] = scaled
-    if not isinstance(ksize, list):
-        ksize=[ksize]
-        config["alphabet_info"][alpha]["ksize"] = ksize
-    # build a parameter for the right combinations
-    #alpha_ksize += expand(f"{alpha}-k{{ksize}}", ksize = ksize)
-    alpha_ksize_scaled += expand(f"{alpha}-k{{ksize}}-sc{{scaled}}", ksize = ksize, scaled=scaled)
+#search_databases = config['search_databases'] # must be dictionary
+gather_dir = config["gather_dir"]
+gather_alpha = config.get("alphabet", 'protein')
+gather_scaled = config.get("scaled", 200)
+gather_ksize = config.get("ksize", 10)
+out_dir = out_dir + f".{gather_alpha}-k{gather_ksize}-sc{gather_scaled}"
 
 onstart:
     print("------------------------------------------------------------------------------------------")
@@ -61,28 +47,29 @@ onsuccess:
 # make dictionary of gtdb proteomes
 proteome_inf = pd.read_csv("/home/ntpierce/2021-rank-compare/output.rank-compare/gtdb-rs207.fromfile.csv")
 proteome_inf.set_index('ident', inplace=True)
-phylodb_inf = pd.read_csv("/home/ntpierce/2022-ocsmash-db/phyloDB/phylodb_1.076.fromfile.csv")
+phylodb_inf = pd.read_csv("/group/ctbrowngrp/sourmash-db/phylodb/phylodb_1.076.fromfile.wident.csv")
 phylodb_inf.set_index('ident', inplace=True)
 # join these dicts
-proteomes= pd.concat(proteome_inf, phylodb_inf)
+proteomes= pd.concat([proteome_inf, phylodb_inf])
 
 rule all:
     input: 
         # read mapping outputs
         #expand(out_dir + '/merge_reads/{sample}.merged.fq.gz', sample=SAMPLES),
-        ancient(expand(out_dir + "/protein_mapping/{sample}.summary.csv", sample=SAMPLES)),
-        expand(f"{out_dir}/protein_leftover/{{sample}}.summary.csv", sample=SAMPLES),
+        expand(out_dir + "/{dir}/{sample}.summary.csv", sample=SAMPLES, dir=['protein_mapping']), #, 'protein_leftover']),
+        #expand(f"{out_dir}/protein_leftover/{{sample}}.summary.csv", sample=SAMPLES),
 
 # use gather results from separate workflow - rule instead of checkpoint? 
 #rule copy_reads_gather:
 checkpoint copy_reads_gather:
     input:
-        gather_csv = lambda w: sample_info.at[w.sample, 'gather_csv']
+        #gather_csv = lambda w: sample_info.at[w.sample, 'gather_csv']
+        gather_csv= lambda w: os.path.join(gather_dir, 'abund-gather', f"{w.sample}.{gather_alpha}-k{gather_ksize}-sc{gather_scaled}.gather.csv")
         #gather_csv = f'output.protein-grist-rs202/gather/{{sample}}.gather.csv'
         #gather_csv = f'{out_dir}/gather/{{sample}}.gather.csv'
     output: 
         os.path.join(out_dir, "gather", "{sample}.gather.csv"),
-        touch(f"{out_dir}/gather/.gather.{{sample}}")   # checkpoints need an output ;)
+        #touch(f"{out_dir}/gather/.gather.{{sample}}")   # checkpoints need an output ;)
     shell:
         """
         cp {input} {output}
@@ -100,9 +87,7 @@ class Checkpoint_GatherResults:
         self.samples = samples
 
     def get_genome_idents(self, sample):
-        # NTP: use rs202 gather results for now
-        gather_csv = f'{out_dir}/gather/{sample}.gather.csv'
-        #gather_csv = f'output.protein-grist-rs202/gather/{sample}.gather.csv'
+        gather_csv=os.path.join(out_dir, 'gather', f'{sample}.gather.csv')
         assert os.path.exists(gather_csv), "gather output does not exist!?"
 
         genome_idents = []
@@ -134,13 +119,9 @@ class Checkpoint_GatherResults:
             return ret
 
     def do_sample(self, w):
-        # wait for the results of 'gather_reads_wc'; this will trigger
+        # wait for the results of 'copy_reads_gather'; this will trigger
         # exception until that rule has been run.
-        #checkpoints.gather_reads_wc.get(**w)
-        
-        # wait for the results of 'run_genome_grist_til_gather'; this will trigger
-        #checkpoints.run_genome_grist_til_gather.get()
-        checkpoints.copy_reads_gather.get()
+        checkpoints.copy_reads_gather.get(**w)
 
         # parse hitlist_genomes,
         genome_idents = self.get_genome_idents(w.sample)
@@ -150,36 +131,10 @@ class Checkpoint_GatherResults:
         return p
 
 
-
-# NTP use this later to re-run gather with rs207
-#rule run_genome_grist_til_gather:
-#checkpoint run_genome_grist_til_gather:
-#    input: "conf/protein-grist.yml",
-#        #config=config["grist-config"] #os.path.join(out_dir, f"config.grist.{basename}.yml"),
-#    output: 
-#        expand(os.path.join(out_dir, "reports/report-{sample}.html"), sample=SAMPLES),
-#        expand(f'{out_dir}/gather/{{sample}}.gather.csv', sample=SAMPLES),
-#        #touc:h(f"output.protein-grist/gather/.gather.{{sample}}")   # checkpoints need an output ;)
-#    log: os.path.join(logs_dir, "genome-grist.log")
-#    benchmark: os.path.join(logs_dir, "genome-grist.benchmark")
-#    threads: 32
-#    resources:
-#        #mem_mb=lambda wildcards, attempt: attempt*145000
-#        mem_mb=150000,
-#        time=400, #240,
-#        partition="med2",
-#    conda: "conf/env/grist.yml"
-#    shell:
-#        """
-#        genome-grist run {input} --resources mem_mb={resources.mem_mb} \
-#                          -j {threads} summarize_gather --nolock \
-#                          2> {log}
-#        """
-
 # bbmerge reads for use with prodigal protein mapper
 rule bbmerge_paired_reads:
     input:
-        interleaved = ancient(out_dir + '/trim/{sample}.trim.fq.gz'),
+        interleaved = ancient(gather_dir + '/trim/{sample}.trim.fq.gz'),
     output:
         merged = protected(out_dir + '/merge_reads/{sample}.merged.fq.gz'),
         unmerged = protected(out_dir + '/merge_reads/{sample}.unmerged.fq.gz'),
@@ -187,13 +142,13 @@ rule bbmerge_paired_reads:
     conda: 'conf/env/bbmap.yml'
     threads: 6
     resources:
-        mem_mb = int(ABUNDTRIM_MEMORY / 1e6),
-        time=400, #240,
-        partition="med2",
+        mem_mb = int(20e9 / 1e6),
+        time=240,
+        partition="low2",
     params:
-        mem = ABUNDTRIM_MEMORY,
-    wildcard_constraints:
-        sample="/w+"
+        mem = 20e9,
+    #wildcard_constraints:
+        #sample="/w+"
     log: os.path.join(logs_dir, "bbmerge", "{sample}.log")
     benchmark: os.path.join(logs_dir, "bbmerge", "{sample}.benchmark")
     shell: 
@@ -209,7 +164,6 @@ rule bbmerge_paired_reads:
 #3. DONE test index and alignment w/paladin
 #4. integrate protein mapping and smash gather results (notebook)
 
-
 def find_proteome(w):
     dl_protdir = "/home/ntpierce/2021-rank-compare/genbank/proteomes"
     prodigal_protdir = "/home/ntpierce/2021-rank-compare/genbank/prodigal"
@@ -221,16 +175,12 @@ def find_proteome(w):
         if len(fn) == 1:
             return fn[0]
     if not fn:
-        fn = glob.glob(phylodb_protdir, phydb_filename))
+        fn = glob.glob(os.path.join(phylodb_protdir, phydb_filename))
         if len(fn) == 1:
             return fn[0]
    
-
-
-rule paladin_index_wc:
+rule paladin_index:
     input:
-        #Checkpoint_ProteomeFiles(f"{out_dir}/proteomes/{{ident}}_protein.faa.gz"),
-        #lambda w: "/home/ntpierce/2021-rank-compare/" + proteome_inf.at[f"{w.ident}", "protein_filename"]
         find_proteome
     output:
         idx = out_dir + "/proteomes/{ident}_protein.faa.gz.bwt",
@@ -240,8 +190,8 @@ rule paladin_index_wc:
         proteome = lambda w: f"{out_dir}/proteomes/{w.ident}_protein.faa.gz",
     resources:
         mem_mb = lambda wildcards, attempt: attempt*3000,
-        time=400, #240,
-        partition="med2",
+        time=240,
+        partition="low2",
     log: os.path.join(logs_dir, "paladin_index", "{ident}.log")
     benchmark: os.path.join(logs_dir, "paladin_index", "{ident}.benchmark")
     conda: 'conf/env/paladin.yml'
@@ -252,7 +202,7 @@ rule paladin_index_wc:
         paladin index -r3 {output.proteome} 2> {log}
         """
 
-rule paladin_align_wc:
+rule paladin_align:
     input:
         merged_reads= out_dir + '/merge_reads/{sample}.merged.fq.gz',
         index= out_dir + "/proteomes/{ident}_protein.faa.gz.bwt",
@@ -270,33 +220,16 @@ rule paladin_align_wc:
     conda: "conf/env/paladin.yml"
     shell:
         """
-        paladin align -t {threads} -T 20 {params.index_base} {input.merged_reads} | samtools view -Sb - > {output} 2> {log}
-        """
-
-# sort bam 
-rule sort_bam:
-    input:
-        bam = out_dir + "/{dir}/{bam}.bam",
-    output:
-        sort = out_dir + "/{dir}/sorted/{bam}.bam",
-    resources:
-        mem_mb = lambda wildcards, attempt: attempt*3000,
-        time=90,
-        partition="med2",
-    log: os.path.join(logs_dir, "sort_bam", "{dir}/{bam}.log")
-    benchmark: os.path.join(logs_dir, "sort_bam", "{dir}/{bam}.benchmark")
-    conda: "conf/env/minimap2.yml"
-    shell: 
-        """
-        samtools sort {input.bam} -o {output.sort} -O bam 2> {log}
+        paladin align -t {threads} -T 20 {params.index_base} {input.merged_reads} \
+                      | samtools view -b -F 4 - | samtools sort  - > {output} 2> {log}
         """
 
 # extract FASTQ from BAM
-rule bam_to_fastq_wc:
+rule bam_to_fastq:
     input:
-        sorted_bam = out_dir + "/protein_mapping/sorted/{bam}.bam",
+        bam = out_dir + "/protein_mapping/{bam}.bam",
     output:
-        mapped = out_dir + "/protein_mapping/sorted/{bam}.mapped.fq.gz",
+        mapped = out_dir + "/protein_mapping/{bam}.mapped.fq.gz",
     resources:
         mem_mb = lambda wildcards, attempt: attempt*3000,
         time=240,
@@ -306,14 +239,14 @@ rule bam_to_fastq_wc:
     conda: "conf/env/minimap2.yml"
     shell: 
         """
-        samtools bam2fq {input.sorted_bam} | gzip > {output.mapped} 2> {log}
+        samtools bam2fq {input.bam} | gzip > {output.mapped} 2> {log}
         """
 
 
 # get per-base depth information from BAM
-rule bam_to_depth_wc:
+rule bam_to_depth:
     input:
-        sorted_bam = out_dir + "/{dir}/sorted/{bam}.bam",
+        sorted_bam = out_dir + "/{dir}/{bam}.bam",
     output:
         depth = out_dir + "/{dir}/{bam}.depth.txt",
     resources:
@@ -329,9 +262,9 @@ rule bam_to_depth_wc:
         """
 
 # wild card rule for getting _covered_ regions from BAM
-rule bam_covered_regions_wc:
+rule bam_covered_regions:
     input:
-        sorted_bam = out_dir + "/{dir}/sorted/{bam}.bam",
+        sorted_bam = out_dir + "/{dir}/{bam}.bam",
     output:
         regions = out_dir + "/{dir}/{bam}.regions.bed",
     resources:
@@ -348,10 +281,10 @@ rule bam_covered_regions_wc:
         """
 
 # calculating SNPs/etc.
-rule mpileup_wc:
+rule mpileup:
     input:
         query = out_dir + "/proteomes/{ident}_protein.faa.gz",
-        sorted_bam = out_dir + "/{dir}/sorted/{sample}.x.{ident}.bam",
+        sorted_bam = out_dir + "/{dir}/{sample}.x.{ident}.bam",
     output:
         bcf = out_dir + "/{dir}/{sample}.x.{ident}.bcf",
         vcf = out_dir + "/{dir}/{sample}.x.{ident}.vcf.gz",
@@ -374,7 +307,7 @@ rule mpileup_wc:
         """
 
 # summarize depth into a CSV
-rule summarize_samtools_depth_wc:
+rule summarize_samtools_depth:
     input:
         depth = Checkpoint_GatherResults(out_dir + f"/{{dir}}/{{sample}}.x.{{ident}}.depth.txt"),
         vcf = Checkpoint_GatherResults(out_dir + f"/{{dir}}/{{sample}}.x.{{ident}}.vcf.gz"),
@@ -393,71 +326,45 @@ rule summarize_samtools_depth_wc:
         """
 
 # convert mapped reads to protein_leftover reads
-rule extract_protein_leftover_reads_wc:
+#rule extract_protein_leftover_reads:
 # THIS WRITES {outdir}/mapping/{sample}.x.{ident}.protein_leftover.fq.gz
-    input:
-        csv = ancient(f'{out_dir}/gather/{{sample}}.gather.csv'),
-        mapped = Checkpoint_GatherResults(f"{out_dir}/protein-mapping/sorted/{{sample}}.x.{{ident}}.mapped.fq.gz"),
-    output:
-        touch(f"{out_dir}/protein_leftover/.protein_leftover.{{sample}}")
-    #conda: "conf/env/sourmash.yml" # i think i have sourmash in main env
-    params:
-        outdir = out_dir,
-    shell:
-        """
-        python -Werror -m genome_grist.subtract_gather \
-            {wildcards.sample:q} {input.csv} --outdir={params.out_dir:q}
-        """
-
-# rule for mapping protein_leftover reads to genomes -> BAM
-rule map_protein_leftover_reads_wc:
-    input:
-        all_csv = f"{out_dir}/mapping/{{sample}}.summary.csv",
-        #query = Checkpoint_GenomeFiles(f"{out_dir}/genomes/{{ident}}_genomic.fna.gz"),
-        protein_leftover_reads_flag = f"{out_dir}/protein_leftover/.protein_leftover.{{sample}}",
-        index= out_dir + "/proteomes/{ident}_protein.faa.gz.bwt",
-    output:
-        bam=out_dir + "/protein_leftover/{sample}.x.{ident}.bam",
-    params:
-        index_base=lambda w: f"{out_dir}/proteomes/{w.ident}_protein.faa.gz"
-    conda: "conf/env/paladin.yml"
-    threads: 4
-    shell: 
-       """
-       paladin align -t {threads} -T 20 {params.index_base} \
-         {out_dir}/protein_mapping/{wildcards.sample}.x.{wildcards.ident}.protein_leftover.fq.gz \
-         | samtools view -b -F 4 - | samtools sort - > {output.bam} 2> {log}
-       """
+#    input:
+#        csv = ancient(f'{out_dir}/gather/{{sample}}.gather.csv'),
+#        mapped = Checkpoint_GatherResults(f"{out_dir}/protein-mapping/{{sample}}.x.{{ident}}.mapped.fq.gz"),
+#        # out_dir + "/protein_mapping/{bam}.mapped.fq.gz"
+#    output:
+#        touch(f"{out_dir}/protein_leftover/.protein_leftover.{{sample}}")
+#    conda: "conf/env/sourmash.yml"
+#    params:
+#        outdir = out_dir,
+#    shell:
+#        """
+#        python -Werror -m genome_grist.subtract_gather \
+#            {wildcards.sample:q} {input.csv} --outdir={params.outdir:q}
+#        """
+#
+## rule for mapping protein_leftover reads to genomes -> BAM
+#rule map_protein_leftover_reads:
+#    input:
+#        all_csv = f"{out_dir}/protein_mapping/{{sample}}.summary.csv",
+#        #query = Checkpoint_GenomeFiles(f"{out_dir}/genomes/{{ident}}_genomic.fna.gz"),
+#        protein_leftover_reads_flag = f"{out_dir}/protein_leftover/.protein_leftover.{{sample}}",
+#        index= out_dir + "/proteomes/{ident}_protein.faa.gz.bwt",
+#    output:
+#        bam=out_dir + "/protein_leftover/{sample}.x.{ident}.bam",
+#    params:
+#        index_base=lambda w: f"{out_dir}/proteomes/{w.ident}_protein.faa.gz"
+#    conda: "conf/env/paladin.yml"
+#    threads: 4
+#    shell: 
+#        """
+#        paladin align -t {threads} -T 20 {params.index_base} \
+#         {out_dir}/protein_mapping/{wildcards.sample}.x.{wildcards.ident}.protein_leftover.fq.gz \
+#         | samtools view -b -F 4 - | samtools sort - > {output.bam} 2> {log}
+#        """
  #   shell:
         #minimap2 -ax sr -t {threads} {input.query} \
      #{outdir}/mapping/{wildcards.sample}.x.{wildcards.ident}.protein_leftover.fq.gz | \
      #       samtools view -b -F 4 - | samtools sort - > {output.bam}
  #       """
  #       """
-
-#rule write_grist_config:
-#    input:
-#        database=os.path.join(out_dir, "databases", "{basename}.zip"),
-#        metagenomes=config["metagenome_list"],
-#    output: os.path.join(out_dir, "config.grist.{basename}.yml")
-#    params:
-#        metagenome_trim_memory=config.get("metagenome_trim_memory", "1e9"),
-#        ksize=ksize,
-#        search_ksize=config["search_ksize"]
-#    run:
-#        with open(str(output), 'w') as out:
-#            out.write(f"out_dir: {out_dir}\n")
-#            out.write(f"metagenome_trim_memory: {params.metagenome_trim_memory}\n")
-#            out.write(f"sourmash_database_glob_pattern: {input.database}\n") # can this have filepath, or does it need to be the basename only?
-#            out.write(f"sample:\n")
-#            for mg in metagenomes:
-#                out.write(f"  - {mg}\n")
-#            out.write(f"sourmash_database_ksize: {params.search_ksize}\n")
-#            out.write(f"sourmash_compute_ksizes:\n")
-#            for k in params.ksize:
-#                out.write(f"  - {k}\n")
-#            out.write("tempdir:")
-#            out.write("  - /scratch")
-
-
-

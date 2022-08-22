@@ -1,0 +1,17 @@
+
+#grist-config: "conf/protein-grist.yml"
+basename: phhz
+samples:
+- SRR606249  # podar
+- SRR1976948 # hu-s1
+#- p8808mo11    # iHMP/IBD
+- SRR5650070    # iHMP/IBD
+- SRR12324253 # zymo mock
+
+sample_info: inputs/phhz.samples.csv
+output_dir: output.phhz-map
+gather_dir: output.phhz-gather
+
+alphabet: protein
+ksize: 10
+scaled: 200
