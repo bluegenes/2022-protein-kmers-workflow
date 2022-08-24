@@ -56,7 +56,7 @@ rule all:
     input: 
         # read mapping outputs
         #expand(out_dir + '/merge_reads/{sample}.merged.fq.gz', sample=SAMPLES),
-        expand(out_dir + "/{dir}/{sample}.summary.csv", sample=SAMPLES, dir=['protein_mapping']), #, 'protein_leftover']),
+        expand(out_dir + "/{dir}/{sample}.summary.csv", sample=SAMPLES, dir=['protein_mapping', 'protein_leftover']),
         #expand(f"{out_dir}/protein_leftover/{{sample}}.summary.csv", sample=SAMPLES),
 
 # use gather results from separate workflow - rule instead of checkpoint? 
@@ -167,15 +167,10 @@ rule bbmerge_paired_reads:
 def find_proteome(w):
     dl_protdir = "/home/ntpierce/2021-rank-compare/genbank/proteomes"
     prodigal_protdir = "/home/ntpierce/2021-rank-compare/genbank/prodigal"
-    phylodb_protdir = "/group/ctbrowngrp/sourmash-db/phylodb/phylodb_1.076_taxsplit.ff"
+    phylodb_protdir = "/group/ctbrowngrp/sourmash-db/phylodb/proteomes"
     filename = f"{w.ident}_protein.faa.gz"
-    phydb_filename = f"{w.ident}.fa"
-    for pd in [prodigal_protdir, dl_protdir]: # must check prodigal dir first for this to work properly
+    for pd in [prodigal_protdir, dl_protdir, phylodb_protdir]: # must check prodigal dir before genbank proteome dir for this to work properly
         fn = glob.glob(os.path.join(pd, filename))
-        if len(fn) == 1:
-            return fn[0]
-    if not fn:
-        fn = glob.glob(os.path.join(phylodb_protdir, phydb_filename))
         if len(fn) == 1:
             return fn[0]
    
@@ -212,8 +207,8 @@ rule paladin_align:
         index_base=lambda w: f"{out_dir}/proteomes/{w.ident}_protein.faa.gz"
     resources:
         mem_mb = lambda wildcards, attempt: attempt*15000,
-        time=6000,
-        partition="med2",
+        time=240,
+        partition="low2",
     log: os.path.join(logs_dir, "paladin_align", "{sample}.x.{ident}.paladin-align.log")
     benchmark: os.path.join(logs_dir, "paladin_align", "{sample}.x.{ident}.paladin-align.benchmark")
     threads: 20
@@ -233,7 +228,7 @@ rule bam_to_fastq:
     resources:
         mem_mb = lambda wildcards, attempt: attempt*3000,
         time=240,
-        partition="med2",
+        partition="low2",
     log: os.path.join(logs_dir, "bam_to_fastq", "{bam}.log")
     benchmark: os.path.join(logs_dir, "bam_to_fastq", "{bam}.benchmark")
     conda: "conf/env/minimap2.yml"
@@ -252,7 +247,7 @@ rule bam_to_depth:
     resources:
         mem_mb = lambda wildcards, attempt: attempt*3000,
         time=240,
-        partition="med2",
+        partition="low2",
     log: os.path.join(logs_dir, "bam_to_depth", "{dir}/{bam}.log")
     benchmark: os.path.join(logs_dir, "bam_to_depth", "{dir}/{bam}.benchmark")
     conda: "conf/env/minimap2.yml"
@@ -270,7 +265,7 @@ rule bam_covered_regions:
     resources:
         mem_mb = lambda wildcards, attempt: attempt*3000,
         time=240,
-        partition="med2",
+        partition="low2",
     log: os.path.join(logs_dir, "bam_covered_regions", "{dir}/{bam}.log")
     benchmark: os.path.join(logs_dir, "bam_covered_regions", "{dir}/{bam}.benchmark")
     conda: "conf/env/covtobed.yml"
@@ -293,7 +288,7 @@ rule mpileup:
     resources:
         mem_mb = lambda wildcards, attempt: attempt*3000,
         time=240,
-        partition="med2",
+        partition="low2",
     log: os.path.join(logs_dir, "mpileup", "{dir}/{sample}.x.{ident}.log")
     benchmark: os.path.join(logs_dir, "mpileup", "{dir}/{sample}.x.{ident}.benchmark")
     shell: 
@@ -316,7 +311,7 @@ rule summarize_samtools_depth:
     resources:
         mem_mb = lambda wildcards, attempt: attempt*3000,
         time=240,
-        partition="med2",
+        partition="low2",
     log: os.path.join(logs_dir, "summarize_samtools_depth", "{dir}/{sample}.log")
     benchmark: os.path.join(logs_dir, "summarize_samtools_depth", "{dir}/{sample}.benchmark")
     shell: 
@@ -326,42 +321,45 @@ rule summarize_samtools_depth:
         """
 
 # convert mapped reads to protein_leftover reads
-#rule extract_protein_leftover_reads:
-# THIS WRITES {outdir}/mapping/{sample}.x.{ident}.protein_leftover.fq.gz
-#    input:
-#        csv = ancient(f'{out_dir}/gather/{{sample}}.gather.csv'),
-#        mapped = Checkpoint_GatherResults(f"{out_dir}/protein-mapping/{{sample}}.x.{{ident}}.mapped.fq.gz"),
-#        # out_dir + "/protein_mapping/{bam}.mapped.fq.gz"
-#    output:
-#        touch(f"{out_dir}/protein_leftover/.protein_leftover.{{sample}}")
-#    conda: "conf/env/sourmash.yml"
-#    params:
-#        outdir = out_dir,
-#    shell:
-#        """
-#        python -Werror -m genome_grist.subtract_gather \
-#            {wildcards.sample:q} {input.csv} --outdir={params.outdir:q}
-#        """
-#
-## rule for mapping protein_leftover reads to genomes -> BAM
-#rule map_protein_leftover_reads:
-#    input:
-#        all_csv = f"{out_dir}/protein_mapping/{{sample}}.summary.csv",
-#        #query = Checkpoint_GenomeFiles(f"{out_dir}/genomes/{{ident}}_genomic.fna.gz"),
-#        protein_leftover_reads_flag = f"{out_dir}/protein_leftover/.protein_leftover.{{sample}}",
-#        index= out_dir + "/proteomes/{ident}_protein.faa.gz.bwt",
-#    output:
-#        bam=out_dir + "/protein_leftover/{sample}.x.{ident}.bam",
-#    params:
-#        index_base=lambda w: f"{out_dir}/proteomes/{w.ident}_protein.faa.gz"
-#    conda: "conf/env/paladin.yml"
-#    threads: 4
-#    shell: 
-#        """
-#        paladin align -t {threads} -T 20 {params.index_base} \
-#         {out_dir}/protein_mapping/{wildcards.sample}.x.{wildcards.ident}.protein_leftover.fq.gz \
-#         | samtools view -b -F 4 - | samtools sort - > {output.bam} 2> {log}
-#        """
+rule extract_protein_leftover_reads:
+# THIS WRITES {outdir}/protein_mapping/{sample}.x.{ident}.protein_leftover.fq.gz
+    input:
+        csv = ancient(f'{out_dir}/gather/{{sample}}.gather.csv'),
+        mapped = Checkpoint_GatherResults(f"{out_dir}/protein_mapping/{{sample}}.x.{{ident}}.mapped.fq.gz"),
+        # out_dir + "/protein_mapping/{bam}.mapped.fq.gz"
+    output:
+        touch(f"{out_dir}/protein_leftover/.protein_leftover.{{sample}}")
+    conda: "conf/env/sourmash.yml"
+    params:
+        outdir = out_dir,
+    shell:
+        """
+        python -Werror subtract_gather.py \
+            {wildcards.sample:q} {input.csv} --outdir={params.outdir:q}
+        """
+
+# rule for mapping protein_leftover reads to genomes -> BAM
+rule map_protein_leftover_reads:
+    input:
+        all_csv = f"{out_dir}/protein_mapping/{{sample}}.summary.csv",
+        #query = Checkpoint_GenomeFiles(f"{out_dir}/genomes/{{ident}}_genomic.fna.gz"),
+        protein_leftover_reads_flag = f"{out_dir}/protein_leftover/.protein_leftover.{{sample}}",
+        index= out_dir + "/proteomes/{ident}_protein.faa.gz.bwt",
+    output:
+        bam=out_dir + "/protein_leftover/{sample}.x.{ident}.bam",
+    params:
+        index_base=lambda w: f"{out_dir}/proteomes/{w.ident}_protein.faa.gz",
+        outdir=out_dir,
+    conda: "conf/env/paladin.yml"
+    log: os.path.join(logs_dir, "paladin/leftover", "{sample}_x_{ident}.log")
+    benchmark: os.path.join(logs_dir, "paladin/leftover", "{sample}_x_{ident}.benchmark")
+    threads: 10
+    shell: 
+        """
+        paladin align -t {threads} -T 20 {params.index_base} \
+           {params.outdir}/protein_mapping/{wildcards.sample}.x.{wildcards.ident}.protein_leftover.fq.gz \
+                      | samtools view -b -F 4 - | samtools sort  - > {output.bam} 2> {log}
+        """
  #   shell:
         #minimap2 -ax sr -t {threads} {input.query} \
      #{outdir}/mapping/{wildcards.sample}.x.{wildcards.ident}.protein_leftover.fq.gz | \
