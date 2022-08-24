@@ -12,26 +12,24 @@ import pandas as pd
 import glob
 configfile: "conf/prot-mapping.yml"
 SAMPLES = config["samples"]
-out_dir = config.get('output_dir', 'output.pgather-vs-pmapping')
-logs_dir = os.path.join(out_dir, "logs")
-benchmarks_dir = os.path.join(out_dir, "benchmarks")
 
 basename = config.get("basename", 'phhz')
 
 sample_info = pd.read_csv(config['sample_info'])
 SAMPLES = sample_info["name"].to_list()
-# hacky, but useful: drop trimmed read names into sample_info dict for easier finding
-#sample_info['trim'] = f'{out_dir}/trim/' + sample_info['name'] + '.trim.fq.gz'
-#sample_info['abundtrim'] = f'{out_dir}/abundtrim/' + sample_info['name'] + '.abundtrim.fq.gz'
 # set name as index for easy access
 sample_info.set_index('name', inplace=True)
 
-#search_databases = config['search_databases'] # must be dictionary
 gather_dir = config["gather_dir"]
 gather_alpha = config.get("alphabet", 'protein')
 gather_scaled = config.get("scaled", 200)
 gather_ksize = config.get("ksize", 10)
+
+out_dir = config.get('output_dir', 'output.pgather-vs-pmapping')
 out_dir = out_dir + f".{gather_alpha}-k{gather_ksize}-sc{gather_scaled}"
+
+logs_dir = os.path.join(out_dir, "logs")
+benchmarks_dir = os.path.join(out_dir, "benchmarks")
 
 onstart:
     print("------------------------------------------------------------------------------------------")
@@ -55,21 +53,15 @@ proteomes= pd.concat([proteome_inf, phylodb_inf])
 rule all:
     input: 
         # read mapping outputs
-        #expand(out_dir + '/merge_reads/{sample}.merged.fq.gz', sample=SAMPLES),
         expand(out_dir + "/{dir}/{sample}.summary.csv", sample=SAMPLES, dir=['protein_mapping', 'protein_leftover']),
-        #expand(f"{out_dir}/protein_leftover/{{sample}}.summary.csv", sample=SAMPLES),
 
 # use gather results from separate workflow - rule instead of checkpoint? 
-#rule copy_reads_gather:
 checkpoint copy_reads_gather:
     input:
-        #gather_csv = lambda w: sample_info.at[w.sample, 'gather_csv']
         gather_csv= lambda w: os.path.join(gather_dir, 'abund-gather', f"{w.sample}.{gather_alpha}-k{gather_ksize}-sc{gather_scaled}.gather.csv")
-        #gather_csv = f'output.protein-grist-rs202/gather/{{sample}}.gather.csv'
         #gather_csv = f'{out_dir}/gather/{{sample}}.gather.csv'
     output: 
         os.path.join(out_dir, "gather", "{sample}.gather.csv"),
-        #touch(f"{out_dir}/gather/.gather.{{sample}}")   # checkpoints need an output ;)
     shell:
         """
         cp {input} {output}
@@ -360,9 +352,3 @@ rule map_protein_leftover_reads:
            {params.outdir}/protein_mapping/{wildcards.sample}.x.{wildcards.ident}.protein_leftover.fq.gz \
                       | samtools view -b -F 4 - | samtools sort  - > {output.bam} 2> {log}
         """
- #   shell:
-        #minimap2 -ax sr -t {threads} {input.query} \
-     #{outdir}/mapping/{wildcards.sample}.x.{wildcards.ident}.protein_leftover.fq.gz | \
-     #       samtools view -b -F 4 - | samtools sort - > {output.bam}
- #       """
- #       """
